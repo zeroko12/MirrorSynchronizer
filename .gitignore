@@ -1,0 +1,16 @@
+node_modules/
+out/
+dist/
+.vite/
+release/
+*.log
+.DS_Store
+.env
+.env.local
+.env.*.local
+coverage/
+*.tsbuildinfo
+
+# Claude Code 本地 session 配置(非项目代码)
+.claude/settings.local.json
+
