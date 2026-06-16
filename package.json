@@ -7,8 +7,8 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "build:win": "npm run build && electron-builder --win --x64",
-    "build:win:portable": "npm run build && electron-builder --win portable --x64",
+    "build:win": "npm run build && electron-builder --win --x64 --publish never",
+    "build:win:portable": "npm run build && electron-builder --win portable --x64 --publish never",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "sync-once": "node --import tsx src/core/cli.ts --once",
     "watch": "node --import tsx src/core/cli.ts --watch",
