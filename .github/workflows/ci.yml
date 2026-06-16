@@ -36,12 +36,13 @@ jobs:
       - name: Vitest
         run: npm test
 
-  # ---- Windows 打包烟测(只在 main 分支跑,PR 太贵)----
+  # ---- Windows 打包(只在 main push 或 v* tag push 时跑,PR 太贵)----
   package-windows:
     name: Package Windows (windows-latest)
     runs-on: windows-latest
-    # 默认只在 main 上跑,PR 跳过(省 Windows runner 配额,本地有需要再手动跑)
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: |
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) &&
+      github.event_name == 'push'
     needs: lint-and-test
     steps:
       - uses: actions/checkout@v4
