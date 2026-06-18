@@ -10,7 +10,8 @@
  * 存储:用现有 config.json 的 fileMappings 字段(无需新文件)
  */
 
-import { onMounted, ref, h } from 'vue';
+import { computed, onMounted, ref, h } from 'vue';
+import { tryLog } from '../utils/try-log';
 import {
   NButton,
   NDataTable,
@@ -25,11 +26,14 @@ import {
   NRadioGroup,
   NPopconfirm,
   NEmpty,
+  NAlert,
+  NSpin,
   useMessage,
   type DataTableColumns,
 } from 'naive-ui';
 import { getApi } from '../api';
 import { useConfig } from '../composables/useConfig';
+import { labelOf, adviceOf } from '@core/labels';
 import type { FileMapping } from '@core/types';
 
 const { config, load, save } = useConfig();
@@ -56,16 +60,65 @@ const formLoading = ref(false);
 const showEmpty = ref(false);
 let isFirstLoad = true;
 
+/** 源文件是否远程(HTTP / WebDAV)— 决定是否显示"浏览…"按钮 */
+const isRemoteSourcePath = computed(() => {
+  const p = form.value?.sourcePath ?? '';
+  return /^https?:\/\//i.test(p) || /^webdav:\/\//i.test(p);
+});
+
+/** 源文件路径 placeholder(按当前类型给示例) */
+const sourcePathPlaceholder = computed(() => {
+  const p = form.value?.sourcePath ?? '';
+  if (/^webdav:\/\//i.test(p)) return '例如 webdav://user:pass@server/webdav/file.ini';
+  if (/^https?:\/\//i.test(p)) return '例如 https://cdn.example.com/build/version.json';
+  if (/^[\\/]{2}[^\\/]/.test(p)) return '例如 \\\\server\\share\\my-config.ini';
+  return '例如 C:\\local\\my-config.ini';
+});
+
+/** 源文件测试(remote 用 sourceTest,local 用 mappingsTestOne 行为) */
+const sourceTestState = ref<{
+  show: boolean;
+  loading: boolean;
+  result: {
+    ok: boolean;
+    fileCount?: number;
+    totalSize?: number;
+    error?: string;
+    fatalReason?: string;
+    durationMs: number;
+  } | null;
+}>({ show: false, loading: false, result: null });
+
+async function onTestSourceMapping() {
+  const source = (form.value?.sourcePath ?? '').trim();
+  if (!source) {
+    message.warning('请先填写源文件路径');
+    return;
+  }
+  sourceTestState.value = { show: true, loading: true, result: null };
+  try {
+    const result = await getApi().sourceTest(source);
+    sourceTestState.value = { show: true, loading: false, result };
+  } catch (err) {
+    sourceTestState.value = {
+      show: true,
+      loading: false,
+      result: {
+        ok: false,
+        error: (err as Error).message ?? '测试失败',
+        fatalReason: 'unknown',
+        durationMs: 0,
+      },
+    };
+  }
+}
+
 async function refreshMappings() {
   if (isFirstLoad) showEmpty.value = true;
-  try {
-    await load();
-  } catch {
-    // 静默失败:load() 内部已经把 error 状态写到 useConfig,UI 会自动显示
-  } finally {
-    isFirstLoad = false;
-    showEmpty.value = false;
-  }
+  // load() 内部已经把 error 状态写到 useConfig,UI 会自动显示;tryLog 只是把异常打到 console
+  await tryLog('mappings:load', () => load());
+  isFirstLoad = false;
+  showEmpty.value = false;
 }
 
 onMounted(() => {
@@ -360,14 +413,23 @@ const columns: DataTableColumns<FileMapping> = [
         <n-form-item label="名称(便于识别)">
           <n-input v-model:value="form.name" placeholder="例:本地配置覆盖" />
         </n-form-item>
-        <n-form-item label="源文件(本地任意位置)">
+        <n-form-item label="源文件(本地 / SMB / HTTP / WebDAV)">
           <n-space :wrap="false">
             <n-input
               v-model:value="form.sourcePath"
-              placeholder="C:\local\my-config.ini"
-              style="width: 380px"
+              :placeholder="sourcePathPlaceholder"
+              style="width: 460px"
             />
-            <n-button @click="pickSource">浏览…</n-button>
+            <n-button
+              v-if="!isRemoteSourcePath"
+              @click="pickSource"
+            >浏览…</n-button>
+            <n-button
+              type="primary"
+              ghost
+              :loading="sourceTestState.loading"
+              @click="onTestSourceMapping"
+            >测试</n-button>
           </n-space>
         </n-form-item>
         <n-form-item
@@ -422,6 +484,57 @@ const columns: DataTableColumns<FileMapping> = [
         <n-space justify="end">
           <n-button @click="showModal = false">取消</n-button>
           <n-button type="primary" :loading="formLoading" @click="onSaveMapping">保存</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- 源文件测试结果 modal -->
+    <n-modal
+      v-model:show="sourceTestState.show"
+      preset="card"
+      style="width: 560px; max-width: 90vw"
+      :title="sourceTestState.result?.ok ? '✓ 源文件可达' : '✗ 源文件不可达'"
+      :bordered="false"
+      size="huge"
+    >
+      <n-spin :show="sourceTestState.loading">
+        <div v-if="!sourceTestState.loading && sourceTestState.result">
+          <template v-if="sourceTestState.result.ok">
+            <n-space vertical :size="8">
+              <n-text>源文件可访问 · 耗时 {{ sourceTestState.result.durationMs }}ms</n-text>
+              <n-text depth="3" style="font-size: 12px">
+                单文件映射,无需文件数 / 总大小。
+              </n-text>
+            </n-space>
+          </template>
+          <template v-else>
+            <n-space vertical :size="8">
+              <n-alert
+                :type="sourceTestState.result.fatalReason === 'permission-denied' || sourceTestState.result.fatalReason === 'not-found' ? 'error' : 'warning'"
+                :show-icon="true"
+              >
+                <n-space vertical :size="4">
+                  <n-text>
+                    <b>{{ labelOf(sourceTestState.result.fatalReason as any) }}</b>
+                  </n-text>
+                  <n-text depth="3" style="font-size: 12px">{{ sourceTestState.result.error }}</n-text>
+                </n-space>
+              </n-alert>
+              <n-text depth="3" style="font-size: 12px">
+                建议:{{ adviceOf(sourceTestState.result.fatalReason as any) }}
+              </n-text>
+            </n-space>
+          </template>
+        </div>
+      </n-spin>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="sourceTestState.show = false">关闭</n-button>
+          <n-button
+            v-if="sourceTestState.result && !sourceTestState.result.ok"
+            type="primary"
+            @click="onTestSourceMapping"
+          >重试</n-button>
         </n-space>
       </template>
     </n-modal>

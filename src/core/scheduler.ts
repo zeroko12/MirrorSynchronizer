@@ -9,9 +9,27 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { dirname } from 'node:path';
 import { Syncer } from './syncer.js';
 import type { AppConfig, FileEntry, SchedulerStatus, SyncResult } from './types.js';
+import { isNetworkReason, type PathErrorKind } from './errors.js';
+import { atomicWriteJson } from './fs-utils.js';
+import { CONSECUTIVE_FAILURES_THRESHOLD, MAX_BACKOFF_MS } from './constants.js';
+
+/**
+ * 指数退避(参考 AWS Full Jitter 算法)
+ * delay = random(0, min(base * 2^(n-1), max))
+ *
+ * @param baseMs 用户配置的 intervalSec
+ * @param consecutiveFailures 连续失败次数
+ * @returns 退避毫秒数
+ */
+export function computeBackoff(baseMs: number, consecutiveFailures: number): number {
+  if (consecutiveFailures <= 0) return baseMs;
+  // 2^(n-1),n=1 → 1, n=2 → 2, n=3 → 4, n=4 → 8 ...
+  const exp = Math.min(baseMs * 2 ** (consecutiveFailures - 1), MAX_BACKOFF_MS);
+  // Full jitter:在 [0, exp] 间均匀随机
+  return Math.floor(Math.random() * exp);
+}
 
 export interface SchedulerOptions {
   config: AppConfig;
@@ -35,7 +53,10 @@ export class Scheduler {
   private lastResult: SyncResult | null = null;
   private lastRunAt: number | null = null;
   private nextRunAt: number | null = null;
+  private nextRunDelayMs: number | null = null;
   private consecutiveFailures = 0;
+  private consecutiveNetworkFailures = 0;
+  private lastFatalReason: PathErrorKind | null = null;
   /** P4: 干运行模式 — 只扫描不实际同步,用于弹窗询问模式 */
   private dryRunMode = false;
 
@@ -51,10 +72,6 @@ export class Scheduler {
    * true  = 弹窗询问模式(syncer 只扫描,不创建/修改/删除文件)
    * false = 自动镜像模式(实时同步)
    */
-  setDryRun(dryRun: boolean): void {
-    this.dryRunMode = dryRun;
-  }
-
   setDryRunMode(dryRun: boolean): void {
     this.dryRunMode = dryRun;
   }
@@ -103,20 +120,28 @@ export class Scheduler {
       intervalSec: this.config.intervalSec,
       lastRunAt: this.lastRunAt,
       nextRunAt: this.nextRunAt,
+      nextRunDelayMs: this.nextRunDelayMs,
       lastResult: this.lastResult,
       consecutiveFailures: this.consecutiveFailures,
+      consecutiveNetworkFailures: this.consecutiveNetworkFailures,
+      lastFatalReason: this.lastFatalReason,
     };
   }
 
   private scheduleNext(delayMs: number): void {
     if (this.stopped) return;
+    // 清除旧 timer(runNow 触发后,原来排程的 timer 还在事件循环里)
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
     this.nextRunAt = Date.now() + delayMs;
+    this.nextRunDelayMs = delayMs;
     this.timer = setTimeout(async () => {
       this.timer = null;
+      this.nextRunDelayMs = null;
       await this.runOnce();
-      if (!this.stopped) {
-        this.scheduleNext(this.config.intervalSec * 1000);
-      }
+      // 下次排程由 runOnce 内部根据成功/失败决定(指数退避 vs 正常)
     }, delayMs);
   }
 
@@ -130,22 +155,18 @@ export class Scheduler {
         dryRun: this.dryRunMode,
       });
       // dryRun 时不更新索引(因为没真的同步,下次还要再 diff 出来)
-      if (!this.dryRunMode) {
+      if (!this.dryRunMode && result.ok) {
         await this.saveIndex(newSourceIndex);
       }
 
       this.lastRunAt = Date.now();
       this.lastResult = result;
+      this.lastFatalReason = result.fatalReason ?? null;
 
-      if (!result.ok) {
-        this.consecutiveFailures++;
-        if (this.consecutiveFailures >= 3 && this.onFatalError) {
-          this.onFatalError(this.consecutiveFailures, result);
-        }
-      } else {
-        this.consecutiveFailures = 0;
-      }
+      // 排下次 + 更新计数(在 onSync 之前,让 callback 拿到最新状态)
+      this.scheduleAfterResult(result);
 
+      // onSync 回调 — 让上层(主进程)处理 UI/通知
       if (this.onSync) {
         await this.onSync(result);
       }
@@ -165,15 +186,51 @@ export class Scheduler {
         warnings: [],
         backupCreated: false,
         fatalError: `调度器异常: ${(err as Error).message}`,
+        fatalReason: 'unknown',
+        fatalTarget: 'config',
       };
       this.lastResult = failedResult;
-      this.consecutiveFailures++;
-      if (this.onFatalError && this.consecutiveFailures >= 3) {
-        this.onFatalError(this.consecutiveFailures, failedResult);
+      this.lastFatalReason = 'unknown';
+      // 异常按网络类处理(常见:SMB 突然断)
+      this.scheduleAfterResult(failedResult);
+      if (this.onSync) {
+        await this.onSync(failedResult);
       }
       return failedResult;
     } finally {
       this.inFlight = false;
+    }
+  }
+
+  /**
+   * 根据结果排下次:
+   * - 成功 → 重置计数,按 intervalSec 排
+   * - 网络类失败 → 累加网络失败计数,指数退避
+   * - 其他 fatal → 累加 consecutiveFailures,正常 interval(用户要修配置)
+   */
+  private scheduleAfterResult(result: SyncResult): void {
+    if (this.stopped) return;
+
+    if (result.ok) {
+      this.consecutiveFailures = 0;
+      this.consecutiveNetworkFailures = 0;
+      this.scheduleNext(this.config.intervalSec * 1000);
+      return;
+    }
+
+    this.consecutiveFailures++;
+    if (this.consecutiveFailures >= CONSECUTIVE_FAILURES_THRESHOLD && this.onFatalError) {
+      this.onFatalError(this.consecutiveFailures, result);
+    }
+
+    if (isNetworkReason(result.fatalReason)) {
+      this.consecutiveNetworkFailures++;
+      const backoff = computeBackoff(this.config.intervalSec * 1000, this.consecutiveNetworkFailures);
+      this.scheduleNext(backoff);
+    } else {
+      // 非网络 fatal(权限/不存在/磁盘满):退避无意义,按正常 interval 重试
+      this.consecutiveNetworkFailures = 0;
+      this.scheduleNext(this.config.intervalSec * 1000);
     }
   }
 
@@ -192,9 +249,6 @@ export class Scheduler {
   private async saveIndex(entries: FileEntry[]): Promise<void> {
     if (!this.indexCachePath) return;
     const path = this.indexCachePath;
-    await fs.mkdir(dirname(path), { recursive: true });
-    const tmp = `${path}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(entries), 'utf-8');
-    await fs.rename(tmp, path);
+    await atomicWriteJson(path, entries);
   }
 }

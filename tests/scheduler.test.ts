@@ -1,10 +1,10 @@
 /**
- * Scheduler 测试 - 验证间隔触发、运行锁、配置热更新
+ * Scheduler 测试 - 验证间隔触发、运行锁、配置热更新、指数退避
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
-import { Scheduler } from '../src/core/scheduler.js';
+import { Scheduler, computeBackoff } from '../src/core/scheduler.js';
 import { makeTempDir, rmTemp, writeTree, wait } from './helpers.js';
 import type { AppConfig, SyncResult } from '../src/core/types.js';
 
@@ -89,5 +89,159 @@ describe('Scheduler', () => {
     const count = results.length;
     await wait(1300);
     expect(results.length).toBe(count);
+  });
+});
+
+describe('Scheduler - 指数退避', () => {
+  let sourceDir: string;
+  let targetDir: string;
+  let indexCachePath: string;
+
+  beforeEach(async () => {
+    sourceDir = await makeTempDir('sch-bkoff-src-');
+    targetDir = await makeTempDir('sch-bkoff-tgt-');
+    indexCachePath = join(await makeTempDir('sch-bkoff-cache-'), 'idx.json');
+  });
+
+  afterEach(async () => {
+    await rmTemp(sourceDir);
+    await rmTemp(targetDir);
+    await rmTemp(join(indexCachePath, '..'));
+  });
+
+  it('computeBackoff:第 1 次失败不超过 base', () => {
+    const delay = computeBackoff(60_000, 1);
+    expect(delay).toBeGreaterThanOrEqual(0);
+    expect(delay).toBeLessThanOrEqual(60_000);
+  });
+
+  it('computeBackoff:第 2 次失败不超过 2x base', () => {
+    const delay = computeBackoff(60_000, 2);
+    expect(delay).toBeGreaterThanOrEqual(0);
+    expect(delay).toBeLessThanOrEqual(120_000);
+  });
+
+  it('computeBackoff:连续失败上限 5 分钟', () => {
+    const delay = computeBackoff(60_000, 20); // 20 次后早就 cap 了
+    expect(delay).toBeLessThanOrEqual(5 * 60 * 1000);
+  });
+
+  it('computeBackoff:n<=0 返回 base', () => {
+    expect(computeBackoff(60_000, 0)).toBe(60_000);
+    expect(computeBackoff(60_000, -1)).toBe(60_000);
+  });
+
+  it('网络类失败 → 退避递增(可观测:nextRunDelayMs 单调不降)', async () => {
+    // source 是网络路径 + 不存在 → 每次都是 network-not-found
+    const cfg: AppConfig = {
+      sourceDir: '\\\\nonexistent-server\\share',
+      targetDir,
+      intervalSec: 60,
+      backupCount: 3,
+      autostart: false,
+      fileMappings: [],
+      backupDir: '',
+    };
+    const sch = new Scheduler({ config: cfg, indexCachePath });
+
+    const r1 = await sch.runNow();
+    expect(r1).not.toBeNull();
+    expect(r1!.ok).toBe(false);
+    expect(r1!.fatalReason).toBe('network-not-found');
+
+    const s1 = sch.getStatus();
+    expect(s1.consecutiveNetworkFailures).toBe(1);
+    expect(s1.consecutiveFailures).toBe(1);
+
+    // runNow 后,老 timer 已被清理,新 timer 已排程(nextRunDelayMs 不为 null)
+    expect(s1.nextRunDelayMs).not.toBeNull();
+    // 退避在 [0, 60s] 范围内
+    expect(s1.nextRunDelayMs).toBeLessThanOrEqual(60_000);
+
+    // 第二次失败
+    await wait(10);
+    const r2 = await sch.runNow();
+    expect(r2!.fatalReason).toBe('network-not-found');
+    const s2 = sch.getStatus();
+    expect(s2.consecutiveNetworkFailures).toBe(2);
+    // 第二次退避期望上限翻倍
+    expect(s2.nextRunDelayMs).toBeLessThanOrEqual(120_000);
+
+    // 第三次
+    const r3 = await sch.runNow();
+    expect(r3!.fatalReason).toBe('network-not-found');
+    const s3 = sch.getStatus();
+    expect(s3.consecutiveNetworkFailures).toBe(3);
+    expect(s3.nextRunDelayMs).toBeLessThanOrEqual(240_000);
+  });
+
+  it('成功一次 → 网络失败计数重置', async () => {
+    // 先用坏 source 跑 2 次
+    const badCfg: AppConfig = {
+      sourceDir: '\\\\nonexistent\\share',
+      targetDir,
+      intervalSec: 60,
+      backupCount: 3,
+      autostart: false,
+      fileMappings: [],
+      backupDir: '',
+    };
+    const sch = new Scheduler({ config: badCfg, indexCachePath });
+    await sch.runNow();
+    await sch.runNow();
+    expect(sch.getStatus().consecutiveNetworkFailures).toBe(2);
+
+    // 换成好 source 跑一次
+    await writeTree(sourceDir, [{ relPath: 'a.txt', content: 'a' }]);
+    sch.updateConfig({ ...badCfg, sourceDir });
+    const rOk = await sch.runNow();
+    expect(rOk!.ok).toBe(true);
+
+    const s = sch.getStatus();
+    expect(s.consecutiveNetworkFailures).toBe(0);
+    expect(s.consecutiveFailures).toBe(0);
+    expect(s.nextRunDelayMs).toBe(60_000); // 回到 base interval
+  });
+
+  it('非网络 fatal → 走原 interval,不计网络失败', async () => {
+    // 本地路径不存在 → not-found(非网络)
+    const cfg: AppConfig = {
+      sourceDir: 'D:/this-path-definitely-does-not-exist-12345',
+      targetDir,
+      intervalSec: 60,
+      backupCount: 3,
+      autostart: false,
+      fileMappings: [],
+      backupDir: '',
+    };
+    const sch = new Scheduler({ config: cfg, indexCachePath });
+    const r = await sch.runNow();
+    expect(r!.ok).toBe(false);
+    expect(r!.fatalReason).toBe('not-found');
+
+    const s = sch.getStatus();
+    expect(s.consecutiveFailures).toBe(1);
+    expect(s.consecutiveNetworkFailures).toBe(0);
+    expect(s.nextRunDelayMs).toBe(60_000); // 走正常 interval
+  });
+
+  it('lastFatalReason 反映最近一次 fatal', async () => {
+    const cfg: AppConfig = {
+      sourceDir: 'D:/this-path-does-not-exist',
+      targetDir,
+      intervalSec: 60,
+      backupCount: 3,
+      autostart: false,
+      fileMappings: [],
+      backupDir: '',
+    };
+    const sch = new Scheduler({ config: cfg, indexCachePath });
+    await sch.runNow();
+    expect(sch.getStatus().lastFatalReason).toBe('not-found');
+
+    // 换网络错
+    sch.updateConfig({ ...cfg, sourceDir: '\\\\nonexistent\\share' });
+    await sch.runNow();
+    expect(sch.getStatus().lastFatalReason).toBe('network-not-found');
   });
 });

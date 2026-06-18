@@ -11,12 +11,16 @@
  */
 
 import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { usePolling } from '../composables/usePolling';
 import {
+  NAlert,
   NButton,
+  NDataTable,
   NForm,
   NFormItem,
   NInput,
   NInputNumber,
+  NModal,
   NSpace,
   NSpin,
   NText,
@@ -25,9 +29,20 @@ import {
   NTag,
   useMessage,
 } from 'naive-ui';
-import type { StatusInfo } from '../api';
+import type { SourceTestResult, StatusInfo } from '../api';
 import { getApi } from '../api';
 import { useConfig } from '../composables/useConfig';
+import { labelOf, adviceOf } from '@core/labels';
+import * as formatUtil from '../utils/format';
+import { tryLog } from '../utils/try-log';
+import {
+  MAX_BACKUP_COUNT,
+  MAX_INTERVAL_SEC,
+  MIN_BACKUP_COUNT,
+  MIN_INTERVAL_SEC,
+  SOURCE_TEST_SAMPLE_SIZE,
+  UI_STATUS_POLL_MS,
+} from '@core/constants';
 
 const { config, loading, saving, error, load, save } = useConfig();
 const status = ref<StatusInfo | null>(null);
@@ -39,8 +54,8 @@ const formReady = computed(() => !loading.value);
 const canSave = computed(() => {
   if (saving.value) return false;
   if (!config.value.sourceDir || !config.value.targetDir) return false;
-  if (config.value.intervalSec < 60 || config.value.intervalSec > 604800) return false;
-  if (config.value.backupCount < 1 || config.value.backupCount > 20) return false;
+  if (config.value.intervalSec < MIN_INTERVAL_SEC || config.value.intervalSec > MAX_INTERVAL_SEC) return false;
+  if (config.value.backupCount < MIN_BACKUP_COUNT || config.value.backupCount > MAX_BACKUP_COUNT) return false;
   if (config.value.backupDir && config.value.backupDir === config.value.targetDir) return false;
   return true;
 });
@@ -49,6 +64,149 @@ const savingRef = ref(false);
 const lastError = ref<string | null>(null);
 const lastSuccessAt = ref<number | null>(null);
 const fileCount = ref<{ source: number; target: number; sourcePath: string; targetPath: string } | null>(null);
+
+/** 距下次同步的剩余秒数(用于倒计时显示) */
+const retryCountdown = ref(0);
+let countdownTimer: number | null = null;
+
+/** 源测试状态 */
+const testState = ref<{
+  show: boolean;
+  loading: boolean;
+  result: SourceTestResult | null;
+}>({
+  show: false,
+  loading: false,
+  result: null,
+});
+
+const testTableColumns = [
+  { title: '相对路径', key: 'relPath', ellipsis: { tooltip: true } },
+  {
+    title: '大小',
+    key: 'size',
+    width: 100,
+    render: (row: { size: number }) => formatBytes(row.size),
+  },
+  {
+    title: '修改时间',
+    key: 'mtimeMs',
+    width: 170,
+    render: (row: { mtimeMs: number }) => new Date(row.mtimeMs).toLocaleString('zh-CN'),
+  },
+];
+
+function formatBytes(n: number): string {
+  return formatUtil.formatBytes(n);
+}
+
+/** 友好的错误原因显示 */
+async function onTestSource() {
+  const source = (config.value?.sourceDir ?? '').trim();
+  if (!source) {
+    message.warning('请先填写源路径');
+    return;
+  }
+  testState.value = { show: true, loading: true, result: null };
+  try {
+    const result = await getApi().sourceTest(source);
+    testState.value = { show: true, loading: false, result };
+  } catch (err) {
+    testState.value = {
+      show: true,
+      loading: false,
+      result: {
+        ok: false,
+        error: (err as Error).message ?? '测试失败',
+        fatalReason: 'unknown',
+        durationMs: 0,
+      },
+    };
+  }
+}
+
+function startCountdownIfNeeded() {
+  const nextRun = status.value?.nextRunDelayMs;
+  const isNetwork = (status.value?.consecutiveNetworkFailures ?? 0) > 0;
+  if (isNetwork && nextRun && nextRun > 0) {
+    retryCountdown.value = Math.ceil(nextRun / 1000);
+    if (!countdownTimer) {
+      countdownTimer = window.setInterval(() => {
+        if (retryCountdown.value > 0) {
+          retryCountdown.value--;
+        } else {
+          // 到点触发一次刷新,等主进程发新 status
+          refreshStatus();
+        }
+      }, 1000);
+    }
+  } else {
+    retryCountdown.value = 0;
+    if (countdownTimer) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }
+  }
+}
+
+/** 识别当前 source 类型(用于 UI 标识) */
+const sourceType = computed(() => {
+  const s = config.value?.sourceDir ?? '';
+  if (/^webdav:\/\//i.test(s)) {
+    return { kind: 'webdav', label: 'WebDAV 源' };
+  }
+  if (/^https?:\/\//i.test(s)) {
+    return { kind: 'http', label: 'HTTP 源', scheme: s.match(/^https?:\/\//i)?.[0] ?? 'http://' };
+  }
+  if (/^[\\/]{2}[^\\/]/.test(s)) return { kind: 'unc', label: 'SMB (UNC)' };
+  if (/^[A-Z]:[\\/]/i.test(s)) return { kind: 'drive', label: 'SMB (挂载盘符)' };
+  return { kind: 'local', label: '本地路径' };
+});
+
+/** 占位符按当前 source 类型给示例 */
+const sourcePlaceholder = computed(() => {
+  switch (sourceType.value.kind) {
+    case 'webdav':
+      return '例如 webdav://user:pass@server/webdav/';
+    case 'http':
+      return '例如 https://cdn.example.com/build/';
+    case 'unc':
+      return '例如 \\\\server\\share 或 \\\\192.168.1.10\\data';
+    case 'drive':
+      return '例如 Z:\\updates 或 D:\\app\\data';
+    default:
+      return '例如 D:\\app\\data 或 /home/user/updates';
+  }
+});
+
+const networkAlert = computed(() => {
+  const s = status.value;
+  if (!s) return null;
+  if ((s.consecutiveNetworkFailures ?? 0) > 0) {
+    return {
+      type: 'warning' as const,
+      title: '网络不可达,已暂停同步',
+      message: `连续 ${s.consecutiveNetworkFailures} 次失败,源路径网络可能已断开(SMB 共享未挂载或断网)`,
+      retry: retryCountdown.value,
+    };
+  }
+  // 非网络 fatal:短暂显示(仅在刚失败时)
+  if (s.lastFatalReason && s.lastResult && !s.lastResult.ok && s.lastFatalReason !== 'unknown') {
+    const labels: Record<string, string> = {
+      'not-found': '源或目标路径不存在',
+      'permission-denied': '权限不足',
+      'disk-full': '磁盘空间不足',
+      'busy': '文件被占用',
+    };
+    return {
+      type: 'error' as const,
+      title: '同步失败',
+      message: labels[s.lastFatalReason] ?? s.lastFatalReason,
+      retry: 0,
+    };
+  }
+  return null;
+});
 
 const message = useMessage();
 
@@ -59,20 +217,13 @@ onMounted(async () => {
   const state = await getApi().stateGet();
   if (state) popupEnabled.value = state.popupEnabled;
   // 加载 P5 开机自启动状态(失败用 false,UI 上是关闭,用户重试时再次拉)
-  try {
-    const as = await getApi().autostartGet();
-    autostartEnabled.value = as.openAtLogin;
-  } catch {
-    autostartEnabled.value = false;
-  }
+  const as = await tryLog('autostartGet', () => getApi().autostartGet());
+  autostartEnabled.value = as?.openAtLogin ?? false;
   // 订阅同步结果事件(从 preload 的 onSyncResult 转发)
   window.api.onSyncResult?.(() => {
     refreshStatus();
   });
-  // 5 秒轮询刷新,即使没有同步事件也能看到调度器状态变化
-  refreshTimer = window.setInterval(() => {
-    refreshStatus();
-  }, 5000);
+  // 5 秒轮询由下面的 usePolling 在 onMounted 自动启动
 });
 
 async function onTogglePopup(enabled: boolean) {
@@ -112,25 +263,23 @@ async function onToggleApplyMappingsImmediately(enabled: boolean) {
 }
 
 onUnmounted(() => {
-  if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
   }
 });
 
-let refreshTimer: number | null = null;
+/** 5 秒轮询状态(usePolling 内部自动管理 onMounted/onUnmounted) */
+usePolling(() => {
+  refreshStatus();
+}, UI_STATUS_POLL_MS, { immediate: false });
 
 async function refreshStatus() {
-  try {
-    status.value = await getApi().getStatus();
-  } catch {
-    // ignore
-  }
-  try {
-    fileCount.value = await getApi().countFiles();
-  } catch {
-    // ignore
-  }
+  const s = await tryLog('getStatus', () => getApi().getStatus());
+  if (s) status.value = s;
+  const fc = await tryLog('countFiles', () => getApi().countFiles());
+  if (fc) fileCount.value = fc;
+  startCountdownIfNeeded();
 }
 
 async function pickFolder(field: 'sourceDir' | 'targetDir' | 'backupDir') {
@@ -180,11 +329,33 @@ function formatTime(ts: number | null): string {
   <div class="page">
     <n-spin :show="loading">
       <div v-if="formReady" class="card">
+        <!-- 网络错误 / 致命错误提示(实时) -->
+        <n-alert
+          v-if="networkAlert"
+          :type="networkAlert.type"
+          :title="networkAlert.title"
+          :show-icon="true"
+          closable
+          style="margin-bottom: 12px"
+        >
+          {{ networkAlert.message }}
+          <span v-if="networkAlert.retry > 0" style="margin-left: 8px">
+            · {{ networkAlert.retry }}s 后重试
+          </span>
+        </n-alert>
+
         <!-- 调度器状态 + 上次同步摘要 + 源/目标文件数 -->
         <div class="status-bar">
           <n-space align="center" :wrap="false">
             <n-tag :type="status?.running ? 'success' : 'default'" size="small">
               {{ status?.running ? '调度器运行中' : '调度器未运行' }}
+            </n-tag>
+            <n-tag
+              :type="sourceType.kind === 'http' ? 'info' : 'default'"
+              size="small"
+              :title="`当前源类型:${sourceType.label}`"
+            >
+              {{ sourceType.label }}
             </n-tag>
             <n-text depth="3" style="font-size: 13px">
               间隔 {{ status?.intervalSec ?? config.intervalSec }} 秒
@@ -235,15 +406,25 @@ function formatTime(ts: number | null): string {
         <n-divider style="margin: 16px 0 20px" />
 
         <n-form label-placement="top" :show-feedback="true">
-          <n-form-item label="源目录(SMB 挂载或本地路径)">
+          <n-form-item label="源路径(本地 / SMB / HTTP / WebDAV)">
             <n-space :wrap="false">
               <n-input
                 v-model:value="config.sourceDir"
-                placeholder="例如 Z:\\updates 或 /mnt/smb/updates"
+                :placeholder="sourcePlaceholder"
                 clearable
-                style="width: 460px"
+                style="width: 520px"
               />
-              <n-button @click="pickFolder('sourceDir')">浏览…</n-button>
+              <n-button
+                v-if="sourceType.kind !== 'http'"
+                @click="pickFolder('sourceDir')"
+              >浏览…</n-button>
+              <n-button
+                type="primary"
+                ghost
+                :loading="testState.loading"
+                :disabled="!config.sourceDir"
+                @click="onTestSource"
+              >测试</n-button>
             </n-space>
           </n-form-item>
 
@@ -277,11 +458,11 @@ function formatTime(ts: number | null): string {
 
           <n-divider />
 
-          <n-form-item label="检查间隔(秒, 60 - 604800 即 7 天)">
+          <n-form-item :label="`检查间隔(秒, ${MIN_INTERVAL_SEC} - ${MAX_INTERVAL_SEC} 即 7 天)`">
             <n-input-number
               v-model:value="config.intervalSec"
-              :min="60"
-              :max="604800"
+              :min="MIN_INTERVAL_SEC"
+              :max="MAX_INTERVAL_SEC"
               :step="60"
               placeholder="秒"
               style="width: 220px"
@@ -294,11 +475,11 @@ function formatTime(ts: number | null): string {
             </n-text>
           </n-form-item>
 
-          <n-form-item label="保留备份数(1 - 20)">
+          <n-form-item :label="`保留备份数(${MIN_BACKUP_COUNT} - ${MAX_BACKUP_COUNT})`">
             <n-input-number
               v-model:value="config.backupCount"
-              :min="1"
-              :max="20"
+              :min="MIN_BACKUP_COUNT"
+              :max="MAX_BACKUP_COUNT"
               :step="1"
               style="width: 220px"
             />
@@ -361,6 +542,47 @@ function formatTime(ts: number | null): string {
 
         <n-divider />
 
+        <!-- 支持的源类型(显式列出,免得用户不知道 WebDAV 也能用) -->
+        <n-form-item label="支持的源类型">
+          <n-space vertical :size="6" style="font-size: 12px; line-height: 1.8">
+            <div>
+              <n-tag size="small" type="default">本地</n-tag>
+              <span style="margin-left: 8px; color: #6b7785">
+                <code>D:\app\data</code> · <code>/home/user/updates</code>
+              </span>
+            </div>
+            <div>
+              <n-tag size="small" type="default">SMB (UNC)</n-tag>
+              <span style="margin-left: 8px; color: #6b7785">
+                <code>\\server\share</code> · <code>\\192.168.1.10\data</code>
+              </span>
+            </div>
+            <div>
+              <n-tag size="small" type="default">SMB (挂载盘符)</n-tag>
+              <span style="margin-left: 8px; color: #6b7785">
+                <code>Z:\updates</code> · 需先把 SMB 共享映射到盘符
+              </span>
+            </div>
+            <div>
+              <n-tag size="small" type="info">HTTP</n-tag>
+              <span style="margin-left: 8px; color: #6b7785">
+                <code>https://cdn.example.com/build/</code> · 需要源提供
+                <code>.manifest.json</code> 或 autoindex 目录列表
+              </span>
+            </div>
+            <div>
+              <n-tag size="small" type="info">WebDAV</n-tag>
+              <span style="margin-left: 8px; color: #6b7785">
+                <code>webdav://user:pass@server/webdav/</code> · 走 PROPFIND,
+                支持 Basic Auth(URL 嵌密码)
+              </span>
+            </div>
+            <n-text depth="3" style="font-size: 12px; margin-top: 4px">
+              文件映射规则的"源路径"同样支持以上所有类型(可以从 HTTP / WebDAV 单文件映射到本地)
+            </n-text>
+          </n-space>
+        </n-form-item>
+
         <n-space>
           <n-button
             type="primary"
@@ -388,11 +610,91 @@ function formatTime(ts: number | null): string {
       </div>
     </n-spin>
 
-    <footer class="footer">
-      <n-text depth="3" style="font-size: 12px">
-        阶段:P2(设置 UI 已可读写,文件映射 UI 在 P5)
-      </n-text>
-    </footer>
+    <footer class="footer" />
+
+    <!-- 源测试结果 modal -->
+    <n-modal
+      v-model:show="testState.show"
+      preset="card"
+      style="width: 720px; max-width: 90vw"
+      :title="testState.result?.ok ? '✓ 源路径测试通过' : '✗ 源路径测试失败'"
+      :bordered="false"
+      size="huge"
+    >
+      <n-spin :show="testState.loading">
+        <div v-if="!testState.loading && testState.result">
+          <!-- 成功 -->
+          <template v-if="testState.result.ok">
+            <n-space vertical :size="12">
+              <n-space>
+                <n-tag :type="testState.result.adapterKind === 'http' ? 'info' : 'default'">
+                  {{ testState.result.adapterKind === 'http' ? 'HTTP 源' : '本地 / SMB' }}
+                </n-tag>
+                <n-text>共 <b>{{ testState.result.fileCount }}</b> 个文件</n-text>
+                <n-text>总大小 <b>{{ formatBytes(testState.result.totalSize ?? 0) }}</b></n-text>
+                <n-text depth="3">耗时 {{ testState.result.durationMs }}ms</n-text>
+              </n-space>
+              <n-alert
+                v-if="(testState.result.fileCount ?? 0) === 0"
+                type="warning"
+                :show-icon="false"
+              >
+                源目录为空 — 同步不会下载任何文件
+              </n-alert>
+              <template v-else>
+                <n-text depth="2" style="font-size: 13px">
+                  前 {{ SOURCE_TEST_SAMPLE_SIZE }} 个文件预览(按路径排序):
+                </n-text>
+                <n-data-table
+                  :columns="testTableColumns"
+                  :data="testState.result.sample ?? []"
+                  :pagination="false"
+                  size="small"
+                  :bordered="false"
+                  striped
+                />
+                <n-text
+                  v-if="(testState.result.fileCount ?? 0) > SOURCE_TEST_SAMPLE_SIZE"
+                  depth="3"
+                  style="font-size: 12px"
+                >
+                  还有 {{ testState.result.fileCount! - SOURCE_TEST_SAMPLE_SIZE }} 个文件未显示
+                </n-text>
+              </template>
+            </n-space>
+          </template>
+          <!-- 失败 -->
+          <template v-else>
+            <n-space vertical :size="12">
+              <n-alert
+                :type="testState.result.fatalReason === 'permission-denied' || testState.result.fatalReason === 'not-found' ? 'error' : 'warning'"
+                :show-icon="true"
+              >
+                <n-space vertical :size="4">
+                  <n-text>
+                    <b>{{ labelOf(testState.result.fatalReason as any) }}</b>
+                  </n-text>
+                  <n-text depth="3" style="font-size: 12px">{{ testState.result.error }}</n-text>
+                </n-space>
+              </n-alert>
+              <n-text depth="3" style="font-size: 12px">
+                建议:{{ adviceOf(testState.result.fatalReason as any) }}
+              </n-text>
+            </n-space>
+          </template>
+        </div>
+      </n-spin>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="testState.show = false">关闭</n-button>
+          <n-button
+            v-if="testState.result && !testState.result.ok"
+            type="primary"
+            @click="onTestSource"
+          >重试</n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 

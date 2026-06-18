@@ -12,6 +12,8 @@ import { promises as fs } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { FileEntry } from './types.js';
+import type { PathErrorKind } from './errors.js';
+import { classifyErrno, isNetworkPath } from './errors.js';
 
 export interface IndexOptions {
   /** 是否对大小相同但 mtime 不同的文件计算 SHA-256(用于冲突消解) */
@@ -26,6 +28,8 @@ export interface ScanResult {
   warnings: string[];
   /** 扫描是否失败(目录不存在或不可读) */
   fatal: boolean;
+  /** 当 fatal=true 时的语义化错误类别 */
+  fatalReason?: PathErrorKind;
 }
 
 /** 路径标准化:Windows 反斜杠 → 正斜杠 */
@@ -85,7 +89,7 @@ export class Indexer {
 
   /**
    * 扫描目录,返回所有文件条目
-   * 目录不存在 → 返回 fatal=true,files=[]
+   * 目录不存在 → 返回 fatal=true,files=[],fatalReason=分类
    */
   async scan(dir: string): Promise<ScanResult> {
     // 目录是否存在
@@ -96,11 +100,28 @@ export class Indexer {
           files: [],
           warnings: [],
           fatal: true,
+          fatalReason: 'not-found',
         };
       }
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return { files: [], warnings: [], fatal: true };
+      const code = (err as NodeJS.ErrnoException).code;
+      // 已知 errno:直接分类
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        return {
+          files: [],
+          warnings: [],
+          fatal: true,
+          fatalReason: classifyErrno(code, dir),
+        };
+      }
+      const reason = classifyErrno(code, dir);
+      if (reason !== 'unknown') {
+        return { files: [], warnings: [], fatal: true, fatalReason: reason };
+      }
+      // 兜底:Windows 上对不存在的 UNC 路径可能抛 UNKNOWN(无 errno)
+      // 此时根据路径形态判定:UNC → 网络;否则抛回
+      if (isNetworkPath(dir)) {
+        return { files: [], warnings: [], fatal: true, fatalReason: 'network-not-found' };
       }
       throw err;
     }
@@ -117,7 +138,14 @@ export class Indexer {
           mtimeMs: st.mtimeMs,
         });
       } catch (err) {
-        warnings.push(`读取文件信息失败: ${rel} (${(err as Error).message})`);
+        const code = (err as NodeJS.ErrnoException).code;
+        const reason = classifyErrno(code, abs);
+        if (reason === 'not-found' || reason === 'network-not-found') {
+          // 单个文件消失/共享断,本文件跳过
+          warnings.push(`文件不可访问: ${rel} (${reason})`);
+        } else {
+          warnings.push(`读取文件信息失败: ${rel} (${(err as Error).message})`);
+        }
       }
     }
 

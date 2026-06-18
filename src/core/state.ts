@@ -14,8 +14,9 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { mainLog } from './logger.js';
+import { atomicWriteJson } from './fs-utils.js';
 
 export interface PostRollbackLock {
   /** 锁定的快照时间戳(目录名) */
@@ -72,10 +73,7 @@ export class StateManager {
 
   async save(next: AppState): Promise<void> {
     this.cache = { ...next };
-    await fs.mkdir(dirname(this.statePath), { recursive: true });
-    const tmp = `${this.statePath}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(next, null, 2), 'utf-8');
-    await fs.rename(tmp, this.statePath);
+    await atomicWriteJson(this.statePath, next);
   }
 
   async update(patch: Partial<AppState>): Promise<AppState> {

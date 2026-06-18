@@ -3,7 +3,10 @@
  * BackupsView - 备份列表(P3 修复版)
  */
 
-import { onMounted, onUnmounted, ref, h } from 'vue';
+import { onMounted, ref, h } from 'vue';
+import { formatBytes, formatTimestamp } from '../utils/format';
+import { usePolling } from '../composables/usePolling';
+import { UI_LIST_POLL_MS } from '@core/constants';
 import {
   NDataTable,
   NTag,
@@ -57,14 +60,7 @@ async function onChangeBackupCount(value: number | null) {
 }
 
 function formatTime(ts: number): string {
-  return new Date(ts).toLocaleString('zh-CN');
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  return formatTimestamp(ts);
 }
 
 async function onRollback(b: BackupItem) {
@@ -113,7 +109,7 @@ const columns: DataTableColumns<BackupItem> = [
       h('span', { style: 'font-family: ui-monospace' }, formatTime(r.createdAt)),
   },
   { title: '文件数', key: 'fileCount', width: 90 },
-  { title: '大小', key: 'sizeBytes', width: 110, render: (r) => formatSize(r.sizeBytes) },
+  { title: '大小', key: 'sizeBytes', width: 110, render: (r) => formatBytes(r.sizeBytes) },
   {
     title: '状态',
     key: 'status',
@@ -174,23 +170,15 @@ const columns: DataTableColumns<BackupItem> = [
   },
 ];
 
-let refreshTimer: number | null = null;
-
+// 自动刷(1s)+ onSyncResult 触发刷新
+usePolling(() => {
+  load();
+}, UI_LIST_POLL_MS, { immediate: false });
 onMounted(() => {
   load();
-  refreshTimer = window.setInterval(() => {
-    load(); // 自动刷,不加 loading 避免闪烁
-  }, 1000);
   window.api.onSyncResult?.(() => {
     load();
   });
-});
-
-onUnmounted(() => {
-  if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
-  }
 });
 
 // 重写 load:首加载用 loading,自动刷不用

@@ -9,8 +9,10 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { dirname, resolve as resolvePath } from 'node:path';
+import { resolve as resolvePath } from 'node:path';
 import type { AppConfig, ConfigManagerOptions } from './types.js';
+import { atomicWriteJson } from './fs-utils.js';
+import { MAX_BACKUP_COUNT, MAX_INTERVAL_SEC, MIN_BACKUP_COUNT, MIN_INTERVAL_SEC } from './constants.js';
 
 const DEFAULT_CONFIG: AppConfig = {
   sourceDir: '',
@@ -61,12 +63,7 @@ export class ConfigManager {
    */
   async save(config: AppConfig): Promise<void> {
     const validated = this.validate(config);
-    const dir = dirname(this.configPath);
-    await fs.mkdir(dir, { recursive: true });
-
-    const tmp = `${this.configPath}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(validated, null, 2), 'utf-8');
-    await fs.rename(tmp, this.configPath);
+    await atomicWriteJson(this.configPath, validated);
   }
 
   /**
@@ -97,10 +94,10 @@ export class ConfigManager {
 
   private validate(config: AppConfig): AppConfig {
     const errors: string[] = [];
-    if (config.intervalSec < 60) errors.push('intervalSec < 60');
-    if (config.intervalSec > 604800) errors.push('intervalSec > 604800 (7 days)');
-    if (config.backupCount < 1) errors.push('backupCount < 1');
-    if (config.backupCount > 20) errors.push('backupCount > 20');
+    if (config.intervalSec < MIN_INTERVAL_SEC) errors.push(`intervalSec < ${MIN_INTERVAL_SEC}`);
+    if (config.intervalSec > MAX_INTERVAL_SEC) errors.push(`intervalSec > ${MAX_INTERVAL_SEC} (7 days)`);
+    if (config.backupCount < MIN_BACKUP_COUNT) errors.push(`backupCount < ${MIN_BACKUP_COUNT}`);
+    if (config.backupCount > MAX_BACKUP_COUNT) errors.push(`backupCount > ${MAX_BACKUP_COUNT}`);
     if (config.backupDir && config.backupDir === config.targetDir) {
       errors.push('backupDir 不能等于 targetDir(否则镜像同步会误删备份)');
     }

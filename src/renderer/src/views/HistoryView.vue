@@ -6,7 +6,9 @@
  * 这样不依赖复杂的 flex 链条,出问题容易定位
  */
 
-import { onMounted, onUnmounted, ref, computed, h } from 'vue';
+import { onMounted, ref, computed, h } from 'vue';
+import { usePolling } from '../composables/usePolling';
+import { UI_LIST_POLL_MS } from '@core/constants';
 import {
   NAlert,
   NDataTable,
@@ -141,23 +143,15 @@ function showDetails(r: HistoryItem) {
   detailsVisible.value = true;
 }
 
-let refreshTimer: number | null = null;
-
+// 自动刷(1s)+ onSyncResult 触发刷新
+usePolling(() => {
+  load();
+}, UI_LIST_POLL_MS, { immediate: false });
 onMounted(() => {
   load();
-  refreshTimer = window.setInterval(() => {
-    load(); // 自动刷,不加 loading
-  }, 1000);
   window.api.onSyncResult?.(() => {
     load();
   });
-});
-
-onUnmounted(() => {
-  if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
-  }
 });
 </script>
 

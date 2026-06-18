@@ -3,6 +3,7 @@
  */
 
 import type { PathLike } from 'node:fs';
+import type { PathErrorKind, PathRole } from './errors.js';
 
 /** 文件条目,代表源/目标里的一个文件 */
 export interface FileEntry {
@@ -14,6 +15,8 @@ export interface FileEntry {
   mtimeMs: number;
   /** 内容哈希,SHA-256 十六进制,可选(仅冲突消解时计算) */
   hash?: string;
+  /** ETag,HTTP 源专用,用于条件请求(If-None-Match) */
+  etag?: string;
 }
 
 /** 索引缓存,持久化到磁盘,用于检测新增/修改/删除 */
@@ -47,6 +50,10 @@ export interface SyncResult {
   unchanged: number;
   /** 致命错误(不可恢复,如源目录不可读) */
   fatalError?: string;
+  /** 致命错误的语义化类别(用于退避策略和 UI 展示) */
+  fatalReason?: PathErrorKind;
+  /** 致命错误归属(source/target/mapping/backup/config) */
+  fatalTarget?: PathRole;
   /** 非致命警告(如某些文件无法访问) */
   warnings: string[];
   /** 本次同步前创建的快照路径(仅当有 modified/deleted 时才创建) */
@@ -61,8 +68,15 @@ export interface SchedulerStatus {
   intervalSec: number;
   lastRunAt: number | null;
   nextRunAt: number | null;
+  /** 距下次运行的延迟(毫秒),可空 */
+  nextRunDelayMs: number | null;
   lastResult: SyncResult | null;
+  /** 任意 fatal 错误连续次数 */
   consecutiveFailures: number;
+  /** 网络类错误连续次数(只对 network-down/timeout 累加) */
+  consecutiveNetworkFailures: number;
+  /** 上次 fatal 错误的类别 */
+  lastFatalReason: PathErrorKind | null;
 }
 
 /** 文件映射规则 */

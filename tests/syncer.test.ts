@@ -447,10 +447,34 @@ describe('Syncer - 边界与错误', () => {
     const { result } = await syncer.sync(null);
 
     expect(result.ok).toBe(false);
-    expect(result.fatalError).toContain('源目录不可访问');
+    expect(result.fatalError).toContain('源目录');
+    // 'Z:/non-existent-smb-share' 不被 isNetworkPath 识别为网络路径
+    // (单字母盘符,无 smb/cifs/nfs 关键词),所以归 not-found
+    expect(result.fatalReason).toBe('not-found');
+    expect(result.fatalTarget).toBe('source');
     // 目标不应被创建(或者保持空)
     const targetFiles = await readTree(targetDir);
     expect(targetFiles.size).toBe(0);
+  });
+
+  it('源是 UNC 路径 + 不存在 → fatalReason=network-not-found', async () => {
+    const config = makeConfig('\\\\nonexistent-server\\share', targetDir);
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    expect(result.ok).toBe(false);
+    expect(result.fatalReason).toBe('network-not-found');
+    expect(result.fatalTarget).toBe('source');
+    expect(result.fatalError).toContain('网络不可达');
+  });
+
+  it('源是 smb 挂载点 + 不存在 → fatalReason=network-not-found', async () => {
+    const config = makeConfig('/mnt/smb/nonexistent', targetDir);
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    expect(result.ok).toBe(false);
+    expect(result.fatalReason).toBe('network-not-found');
   });
 
   it('目标目录不存在 → 自动创建', async () => {

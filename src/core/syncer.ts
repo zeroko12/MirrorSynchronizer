@@ -24,6 +24,21 @@ import { Indexer, type ScanResult } from './indexer.js';
 import { Backupper } from './backupper.js';
 import { coreLog } from './logger.js';
 import { deriveDefaultBackupDir, type AppConfig, type FileEntry, type FileMapping, type SyncResult } from './types.js';
+import {
+  classifyErrno,
+  classifyFetchError,
+  classifyHttpStatus,
+  formatFatalMessage,
+  isNetworkReason,
+  type PathErrorKind,
+} from './errors.js';
+import { pickAdapter, streamToFile, isRemotePath, type SourceAdapter } from './adapter.js';
+import { MTIME_JITTER_TOLERANCE_MS } from './constants.js';
+
+/** 致命错误时是否应中断后续步骤(网络类) */
+function shouldAbortOnError(reason: PathErrorKind | null | undefined): boolean {
+  return isNetworkReason(reason);
+}
 
 function normalize(rel: string): string {
   return rel.split(sep).join('/');
@@ -106,6 +121,8 @@ export class Syncer {
     const { targetDir, fileMappings } = this.config;
     if (!targetDir) {
       result.fatalError = '目标目录未配置';
+      result.fatalReason = 'not-found';
+      result.fatalTarget = 'config';
       result.durationMs = Date.now() - startedAt;
       return result;
     }
@@ -114,7 +131,12 @@ export class Syncer {
     try {
       await fs.mkdir(targetDir, { recursive: true });
     } catch (err) {
-      result.fatalError = `无法创建目标目录: ${(err as Error).message}`;
+      const code = (err as NodeJS.ErrnoException).code;
+      const reason = classifyErrno(code, targetDir);
+      result.fatalReason = reason;
+      result.fatalTarget = 'target';
+      result.fatalError = formatFatalMessage(reason, 'target', targetDir) +
+        ` (${(err as Error).message})`;
       result.durationMs = Date.now() - startedAt;
       return result;
     }
@@ -167,19 +189,30 @@ export class Syncer {
     const { sourceDir, targetDir, fileMappings } = this.config;
     if (!sourceDir || !targetDir) {
       result.fatalError = '源目录或目标目录未配置';
+      result.fatalReason = 'not-found';
+      result.fatalTarget = 'config';
       result.durationMs = Date.now() - startedAt;
       return { result, newSourceIndex: [] };
     }
 
-    // 1. 扫描源
-    const sourceScan: ScanResult = await this.indexer.scan(sourceDir);
-    if (sourceScan.fatal) {
-      result.fatalError = `源目录不可访问: ${sourceDir}(可能未挂载或不存在)`;
-      result.warnings.push(...sourceScan.warnings);
+    // 1. 扫描源(通过 SourceAdapter — 自动选 FsAdapter 或 HttpAdapter)
+    const adapter = pickAdapter(sourceDir);
+    let sourceFiles: FileEntry[] = [];
+    try {
+      sourceFiles = await adapter.scan();
+    } catch (err) {
+      const fatalOutcome = this.classifyAdapterError(err, sourceDir);
+      result.fatalReason = fatalOutcome.reason;
+      result.fatalTarget = 'source';
+      result.fatalError = formatFatalMessage(fatalOutcome.reason, 'source', sourceDir);
+      if (fatalOutcome.warnings) result.warnings.push(...fatalOutcome.warnings);
       result.durationMs = Date.now() - startedAt;
+      // 出错时关闭 adapter 资源(keep-alive 等)
+      await adapter.close().catch(() => undefined);
       return { result, newSourceIndex: [] };
     }
-    result.warnings.push(...sourceScan.warnings);
+
+    // 2. 扫描目标(始终是本地)
 
     // 2. 扫描目标
     const targetScan: ScanResult = await this.indexer.scan(targetDir);
@@ -189,8 +222,14 @@ export class Syncer {
       try {
         await fs.mkdir(targetDir, { recursive: true });
       } catch (err) {
-        result.fatalError = `无法创建目标目录: ${targetDir} (${(err as Error).message})`;
+        const code = (err as NodeJS.ErrnoException).code;
+        const reason = classifyErrno(code, targetDir);
+        result.fatalReason = reason;
+        result.fatalTarget = 'target';
+        result.fatalError = formatFatalMessage(reason, 'target', targetDir) +
+          ` (${(err as Error).message})`;
         result.durationMs = Date.now() - startedAt;
+        await adapter.close().catch(() => undefined);
         return { result, newSourceIndex: [] };
       }
     }
@@ -198,7 +237,7 @@ export class Syncer {
 
     // 3. 构建 map
     const sourceMap = new Map<string, FileEntry>();
-    for (const f of sourceScan.files) sourceMap.set(f.relPath, f);
+    for (const f of sourceFiles) sourceMap.set(f.relPath, f);
 
     const targetMap = new Map<string, FileEntry>();
     for (const f of targetScan.files) targetMap.set(f.relPath, f);
@@ -230,7 +269,7 @@ export class Syncer {
         plannedAdded.push(rel);
       } else if (
         tFile.size !== sFile.size ||
-        Math.abs(tFile.mtimeMs - sFile.mtimeMs) > 2
+        Math.abs(tFile.mtimeMs - sFile.mtimeMs) > MTIME_JITTER_TOLERANCE_MS
       ) {
         plannedModified.push(rel);
       }
@@ -274,7 +313,7 @@ export class Syncer {
       const isNew = !lastIndexMap.has(rel);
       const needsCopy = !tFile
         || tFile.size !== sFile.size
-        || Math.abs(tFile.mtimeMs - sFile.mtimeMs) > 2; // 2ms 抖动容忍
+        || Math.abs(tFile.mtimeMs - sFile.mtimeMs) > MTIME_JITTER_TOLERANCE_MS;
 
       if (needsCopy) {
         // dryRun 时只记录,不实际拷贝
@@ -282,9 +321,23 @@ export class Syncer {
         else result.modified.push(rel);
         if (!dryRun) {
           try {
-            await this.copyFile(sourceDir, targetDir, sFile);
+            await this.copyFromAdapter(adapter, targetDir, sFile);
           } catch (err) {
-            result.warnings.push(`拷贝失败: ${rel} (${(err as Error).message})`);
+            const outcome = this.classifyAdapterError(err, sourceDir);
+            if (shouldAbortOnError(outcome.reason)) {
+              // 网络类错误:中止本轮,避免 partial sync 让索引错位
+              result.fatalReason = outcome.reason;
+              result.fatalTarget = 'source';
+              result.fatalError = `同步中断(${rel}): ${formatFatalMessage(outcome.reason, 'source', sourceDir)}`;
+              coreLog.error(`[sync] 网络类错误中断: ${rel} (${outcome.reason})`);
+              result.warnings.push(...result.modified.slice().map((m) => `未完成: ${m}`));
+              result.warnings.push(...result.added.slice().map((m) => `未完成: ${m}`));
+              result.modified = result.modified.filter((m) => result.added.includes(m) ? false : true);
+              // 简化:已记录的需要回滚,这里不主动回滚 — backup 快照是兜底
+              break;
+            }
+            // 非致命:warning 继续
+            result.warnings.push(`拷贝失败: ${rel} (${outcome.reason ?? (err as Error).message})`);
           }
         }
       } else {
@@ -304,9 +357,16 @@ export class Syncer {
           await fs.unlink(targetPath);
         } catch (err) {
           const code = (err as NodeJS.ErrnoException).code;
-          if (code !== 'ENOENT') {
-            result.warnings.push(`删除失败: ${rel} (${(err as Error).message})`);
+          if (code === 'ENOENT') continue; // 已不存在,跳过
+          const reason = classifyErrno(code, join(targetDir, rel));
+          if (shouldAbortOnError(reason)) {
+            result.fatalReason = reason;
+            result.fatalTarget = 'target';
+            result.fatalError = `删除中断(${rel}): ${formatFatalMessage(reason, 'target', targetDir)}`;
+            coreLog.error(`[sync] 删除时网络错误: ${rel} (${reason})`);
+            break;
           }
+          result.warnings.push(`删除失败: ${rel} (${reason ?? (err as Error).message})`);
         }
       }
     }
@@ -321,16 +381,58 @@ export class Syncer {
 
     result.ok = !result.fatalError;
     result.durationMs = Date.now() - startedAt;
-    return { result, newSourceIndex: sourceScan.files };
+    // 关闭 adapter 资源(keep-alive agent 等)
+    await adapter.close().catch(() => undefined);
+    return { result, newSourceIndex: sourceFiles };
   }
 
-  private async copyFile(sourceDir: string, targetDir: string, file: FileEntry): Promise<void> {
-    const src = join(sourceDir, file.relPath);
+  /**
+   * 把文件从 adapter 流式拷贝到目标路径
+   * 替换原 copyFile,统一走 SourceAdapter 抽象:
+   * - FsAdapter 内部走 createReadStream
+   * - HttpAdapter 内部走 fetch().body
+   */
+  private async copyFromAdapter(
+    adapter: SourceAdapter,
+    targetDir: string,
+    file: FileEntry,
+  ): Promise<void> {
     const dst = join(targetDir, file.relPath);
-    await fs.mkdir(dirname(dst), { recursive: true });
-    await fs.copyFile(src, dst);
-    // 保留 mtime,避免下一轮被误判
-    await fs.utimes(dst, new Date(file.mtimeMs), new Date(file.mtimeMs));
+    const stream = await adapter.open(file.relPath);
+    await streamToFile(stream, dst, file.mtimeMs);
+  }
+
+  /**
+   * 把 adapter 抛出的错误归类到 PathErrorKind
+   * - FsAdapter fatal:err.scanResult.fatalReason
+   * - HttpAdapter:从 "HTTP NNN" 消息提取状态码,或从 errno 分类
+   */
+  private classifyAdapterError(
+    err: unknown,
+    sourceDir: string,
+  ): { reason: PathErrorKind; warnings?: string[] } {
+    // FsAdapter 风格:挂载了 scanResult
+    const scanResult = (err as { scanResult?: ScanResult }).scanResult;
+    if (scanResult && scanResult.fatal) {
+      return { reason: scanResult.fatalReason ?? 'unknown', warnings: scanResult.warnings };
+    }
+    // HttpAdapter 风格:从消息里解析 HTTP 状态码
+    const msg = (err as Error)?.message ?? '';
+    const statusMatch = /HTTP\s+(\d{3})/.exec(msg);
+    if (statusMatch) {
+      return { reason: classifyHttpStatus(Number(statusMatch[1])) };
+    }
+    // 通用 fetch / fs 错误
+    const fetchReason = classifyFetchError(err);
+    if (fetchReason !== 'unknown') {
+      return { reason: fetchReason };
+    }
+    // 兜底:按 fs errno 再试一次(可能是 FsAdapter 在非 fatal 路径抛错)
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code) {
+      return { reason: classifyErrno(code, sourceDir) };
+    }
+    return { reason: 'unknown' };
   }
 
   private async applyMapping(
@@ -362,17 +464,43 @@ export class Syncer {
 
     // 2. 检查源文件是否存在
     let sourceExists = false;
-    try {
-      const st = await fs.stat(mapping.sourcePath);
-      sourceExists = st.isFile();
-      coreLog.info(`[mapping] ${mapping.name}: stat sourcePath ok, isFile=${st.isFile()} isDir=${st.isDirectory()}`);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      coreLog.info(`[mapping] ${mapping.name}: stat sourcePath 失败 (code=${code}): ${(err as Error).message}`);
-      if (code !== 'ENOENT') {
+    let sourceSize = 0;
+    if (isRemotePath(mapping.sourcePath)) {
+      // 远程源:走 SourceAdapter(支持 http/https/webdav)
+      try {
+        const adapter = pickAdapter(mapping.sourcePath);
+        // 拿 HEAD / 0字节流检查存在性 + size
+        const normalized = mapping.sourcePath.replace(/^webdav:/i, 'https:');
+        const head = await fetch(normalized, { method: 'HEAD' });
+        if (head.ok) {
+          sourceExists = true;
+          sourceSize = Number(head.headers.get('content-length') ?? 0);
+        }
+        await adapter.close().catch(() => undefined);
+        coreLog.info(`[mapping] ${mapping.name}: HEAD sourcePath ok, size=${sourceSize}`);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        const reason = classifyErrno(code, mapping.sourcePath);
+        coreLog.info(`[mapping] ${mapping.name}: HEAD 失败 (code=${code}, reason=${reason}): ${(err as Error).message}`);
         result.warnings.push(
-          `映射源文件 stat 失败: ${mapping.name} (${(err as Error).message})`,
+          `映射源文件不可达: ${mapping.name} (${reason ?? (err as Error).message})`,
         );
+      }
+    } else {
+      try {
+        const st = await fs.stat(mapping.sourcePath);
+        sourceExists = st.isFile();
+        sourceSize = st.size;
+        coreLog.info(`[mapping] ${mapping.name}: stat sourcePath ok, isFile=${st.isFile()} isDir=${st.isDirectory()}`);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        const reason = classifyErrno(code, mapping.sourcePath);
+        coreLog.info(`[mapping] ${mapping.name}: stat sourcePath 失败 (code=${code}, reason=${reason}): ${(err as Error).message}`);
+        if (code !== 'ENOENT' || reason === 'network-not-found') {
+          result.warnings.push(
+            `映射源文件 stat 失败: ${mapping.name} (${reason ?? (err as Error).message})`,
+          );
+        }
       }
     }
 
@@ -407,13 +535,27 @@ export class Syncer {
     if (!dryRun) {
       try {
         await fs.mkdir(dirname(targetPath), { recursive: true });
-        await fs.copyFile(mapping.sourcePath, targetPath);
-        await fs.utimes(targetPath, new Date(), new Date());
-        coreLog.info(`[mapping] ${mapping.name}: 已拷贝到 ${targetPath}`);
+        if (isRemotePath(mapping.sourcePath)) {
+          // 远程源:走 SourceAdapter 流式下载
+          const adapter = pickAdapter(mapping.sourcePath);
+          try {
+            const stream = await adapter.open(mapping.sourcePath);
+            await streamToFile(stream, targetPath, Date.now());
+            coreLog.info(`[mapping] ${mapping.name}: 已从远程源拷贝到 ${targetPath}`);
+          } finally {
+            await adapter.close().catch(() => undefined);
+          }
+        } else {
+          await fs.copyFile(mapping.sourcePath, targetPath);
+          await fs.utimes(targetPath, new Date(), new Date());
+          coreLog.info(`[mapping] ${mapping.name}: 已拷贝到 ${targetPath}`);
+        }
       } catch (err) {
-        coreLog.error(`[mapping] ${mapping.name}: 拷贝失败 ${(err as Error).message}`);
+        const code = (err as NodeJS.ErrnoException).code;
+        const reason = classifyErrno(code, mapping.sourcePath);
+        coreLog.error(`[mapping] ${mapping.name}: 拷贝失败 ${reason ?? (err as Error).message}`);
         result.warnings.push(
-          `映射拷贝失败: ${mapping.name} (${(err as Error).message})`,
+          `映射拷贝失败: ${mapping.name} (${reason ?? (err as Error).message})`,
         );
       }
     } else {

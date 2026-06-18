@@ -1,39 +1,60 @@
 /**
  * Renderer API 类型化封装
  *
- * preload 暴露的 window.api 是 unknown,这里包成强类型
- * 所有 UI 代码都通过 useApi() 拿,避免直接接触 window
+ * 类型本身来自 `@core/api-contracts`,preload 桥接的实际对象用 typeof 推导
+ * 这样改 api 对象 → 渲染端类型自动跟随,不会漂移
  */
 
 import type { AppConfig } from '@core/types';
+import type {
+  AppStateInfo,
+  AutostartResult,
+  AutostartStatus,
+  BackupDeleteResult,
+  BackupItem,
+  BackupRollbackResult,
+  CountFilesResult,
+  HistoryDeleteResult,
+  HistoryListResult,
+  MappingsApplyResult,
+  SaveConfigResult,
+  SelectFolderResult,
+  SelectPathResult,
+  SourceTestResult,
+  StateSetPopupEnabledResult,
+  StatusInfo,
+  UpdatePromptPayload,
+  UserDecideAction,
+  UserDecideResult,
+} from '@core/api-contracts';
 
-export interface StatusInfo {
-  sourceDir: string;
-  targetDir: string;
-  backupDir: string;
-  intervalSec: number;
-  backupCount: number;
-  autostart: boolean;
-  fileMappings: AppConfig['fileMappings'];
-  running: boolean;
-  lastResult: {
-    added: number;
-    modified: number;
-    deleted: number;
-    durationMs: number;
-    ok: boolean;
-  } | null;
-}
+// 重新导出,供视图组件直接 import(避免每处都 import 跨模块)
+export type {
+  AppStateInfo,
+  AutostartResult,
+  AutostartStatus,
+  BackupDeleteResult,
+  BackupItem,
+  BackupRollbackResult,
+  CountFilesResult,
+  HistoryDeleteResult,
+  HistoryItem,
+  HistoryListResult,
+  MappingsApplyResult,
+  SaveConfigResult,
+  SelectFolderResult,
+  SelectPathResult,
+  SourceTestFileEntry,
+  SourceTestResult,
+  StateSetPopupEnabledResult,
+  StatusInfo,
+  UpdatePromptPayload,
+  UserDecideAction,
+  UserDecideResult,
+} from '@core/api-contracts';
 
-export interface SelectFolderResult {
-  canceled: boolean;
-  path: string | null;
-}
-
-export interface SaveConfigResult {
-  ok: boolean;
-  error?: string;
-}
+export interface SelectFolderResultLocal extends SelectFolderResult {}
+export interface SaveConfigResultLocal extends SaveConfigResult {}
 
 declare global {
   interface Window {
@@ -43,95 +64,23 @@ declare global {
       loadConfig: () => Promise<AppConfig>;
       saveConfig: (config: AppConfig) => Promise<SaveConfigResult>;
       selectFolder: (defaultPath?: string) => Promise<SelectFolderResult>;
-      selectPath: (opts: { defaultPath?: string; mode: 'file' | 'folder' | 'both' }) => Promise<{
-        canceled: boolean;
-        path: string | null;
-        isDirectory: boolean;
-      }>;
+      selectPath: (opts: { defaultPath?: string; mode: 'file' | 'folder' | 'both' }) => Promise<SelectPathResult>;
       onSyncResult?: (callback: (result: unknown) => void) => () => void;
-      countFiles: () => Promise<{
-        source: number;
-        target: number;
-        sourcePath: string;
-        targetPath: string;
-        sourceFatal: boolean;
-        targetFatal: boolean;
-      }>;
-      historyList: (opts?: { limit?: number; offset?: number }) => Promise<{
-        items: Array<{
-          id: number;
-          startedAt: number;
-          durationMs: number;
-          sourceDir: string;
-          targetDir: string;
-          addedCount: number;
-          modifiedCount: number;
-          deletedCount: number;
-          unchangedCount: number;
-          mappingCopiedCount: number;
-          mappingSkippedExistingCount: number;
-          mappingSkippedCount: number;
-          fatalError: string | null;
-          backupId: number | null;
-        }>;
-        total: number;
-      }>;
-      historyDelete: (id: number) => Promise<{ ok: boolean; error?: string }>;
-      backupList: () => Promise<Array<{
-        id: number;
-        createdAt: number;
-        sourceDir: string;
-        targetDir: string;
-        snapshotPath: string;
-        fileCount: number;
-        sizeBytes: number;
-        _stale?: boolean;
-      }>>;
-      backupRollback: (id: number) => Promise<{
-        ok: boolean;
-        error?: string;
-        safetySnapshotPath?: string;
-      }>;
-      backupDelete: (id: number) => Promise<{ ok: boolean; error?: string }>;
-
-      // P4: 弹窗决策、状态查询、popup 开关
-      userDecide: (action: 'apply' | 'snooze' | 'ignore', hash: string) => Promise<{
-        ok: boolean;
-        error?: string;
-      }>;
-      stateGet: () => Promise<{
-        lastShownChangeHash: string | null;
-        postRollbackLock: { snapshotTimestamp: string; syncId: number; lockedAt: number } | null;
-        snoozeUntil: number;
-        popupEnabled: boolean;
-      } | null>;
-      stateSetPopupEnabled: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
-      autostartGet: () => Promise<{ openAtLogin: boolean }>;
-      autostartSet: (enabled: boolean) => Promise<{ ok: boolean; openAtLogin?: boolean; error?: string }>;
-      mappingsApplyAll: () => Promise<{
-        ok: boolean;
-        mappingCopied?: string[];
-        mappingSkippedExisting?: string[];
-        mappingSkipped?: string[];
-        warnings?: string[];
-        error?: string;
-      }>;
-      mappingsTestOne: (id: string) => Promise<{
-        ok: boolean;
-        mappingCopied?: string[];
-        mappingSkippedExisting?: string[];
-        mappingSkipped?: string[];
-        warnings?: string[];
-        error?: string;
-      }>;
-      onUpdatePrompt: (callback: (payload: {
-        hash: string;
-        addedCount: number;
-        modifiedCount: number;
-        deletedCount: number;
-        isLocked: boolean;
-        lockSnapshotTimestamp: string | null;
-      }) => void) => () => void;
+      countFiles: () => Promise<CountFilesResult>;
+      historyList: (opts?: { limit?: number; offset?: number }) => Promise<HistoryListResult>;
+      historyDelete: (id: number) => Promise<HistoryDeleteResult>;
+      backupList: () => Promise<BackupItem[]>;
+      backupRollback: (id: number) => Promise<BackupRollbackResult>;
+      backupDelete: (id: number) => Promise<BackupDeleteResult>;
+      userDecide: (action: UserDecideAction, hash: string) => Promise<UserDecideResult>;
+      stateGet: () => Promise<AppStateInfo | null>;
+      stateSetPopupEnabled: (enabled: boolean) => Promise<StateSetPopupEnabledResult>;
+      autostartGet: () => Promise<AutostartStatus>;
+      autostartSet: (enabled: boolean) => Promise<AutostartResult>;
+      mappingsApplyAll: () => Promise<MappingsApplyResult>;
+      mappingsTestOne: (id: string) => Promise<MappingsApplyResult>;
+      sourceTest: (source: string) => Promise<SourceTestResult>;
+      onUpdatePrompt: (callback: (payload: UpdatePromptPayload) => void) => () => void;
       $invoke: (channel: string, ...args: unknown[]) => Promise<{ ok: boolean; error?: string; [k: string]: unknown }>;
     };
     autoUpdater: typeof window.api;

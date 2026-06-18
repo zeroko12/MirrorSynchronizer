@@ -22,6 +22,8 @@ import { ConfigManager, DEFAULT_CONFIG, defaultConfigPath } from './config.js';
 import { Syncer } from './syncer.js';
 import { Scheduler } from './scheduler.js';
 import { cliLog } from './logger.js';
+import { atomicWriteJson } from './fs-utils.js';
+import { APP_DATA_SUBDIR, MIN_INTERVAL_SEC } from './constants.js';
 import type { AppConfig, FileEntry, SyncResult } from './types.js';
 
 interface CliArgs {
@@ -40,13 +42,13 @@ function userDataDir(): string {
   const platform = process.platform;
   if (platform === 'win32') {
     const appData = process.env.APPDATA || join(os.homedir(), 'AppData', 'Roaming');
-    return join(appData, 'auto-updater');
+    return join(appData, APP_DATA_SUBDIR);
   }
   if (platform === 'darwin') {
-    return join(os.homedir(), 'Library', 'Application Support', 'auto-updater');
+    return join(os.homedir(), 'Library', 'Application Support', APP_DATA_SUBDIR);
   }
   const xdg = process.env.XDG_CONFIG_HOME || join(os.homedir(), '.config');
-  return join(xdg, 'auto-updater');
+  return join(xdg, APP_DATA_SUBDIR);
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -64,8 +66,8 @@ function parseArgs(argv: string[]): CliArgs {
       case '--backup-dir': out.backupDir = argv[++i]; break;
       case '--interval': {
         const v = Number(argv[++i]);
-        if (Number.isNaN(v) || v < 60) {
-          throw new Error(`--interval 必须是 >= 60 的整数`);
+        if (Number.isNaN(v) || v < MIN_INTERVAL_SEC) {
+          throw new Error(`--interval 必须是 >= ${MIN_INTERVAL_SEC} 的整数`);
         }
         out.interval = v;
         break;
@@ -125,11 +127,8 @@ async function loadIndexCache(userData: string): Promise<FileEntry[] | null> {
 }
 
 async function saveIndexCache(userData: string, entries: FileEntry[]): Promise<void> {
-  await fs.mkdir(userData, { recursive: true });
   const path = join(userData, 'index-cache.json');
-  const tmp = `${path}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(entries), 'utf-8');
-  await fs.rename(tmp, path);
+  await atomicWriteJson(path, entries);
 }
 
 async function runInit(args: CliArgs): Promise<void> {

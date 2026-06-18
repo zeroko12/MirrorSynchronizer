@@ -26,11 +26,19 @@ describe('Indexer', () => {
     expect(result.warnings).toEqual([]);
   });
 
-  it('目录不存在:fatal=true', async () => {
+  it('目录不存在:fatal=true,reason=not-found', async () => {
     const indexer = new Indexer();
     const result = await indexer.scan(join(dir, 'no-such-dir'));
     expect(result.fatal).toBe(true);
     expect(result.files).toEqual([]);
+    expect(result.fatalReason).toBe('not-found');
+  });
+
+  it('网络路径 + 目录不存在:fatalReason=network-not-found', async () => {
+    const indexer = new Indexer();
+    const result = await indexer.scan('\\\\nonexistent-server\\share');
+    expect(result.fatal).toBe(true);
+    expect(result.fatalReason).toBe('network-not-found');
   });
 
   it('递归扫描,返回所有文件(相对路径用正斜杠)', async () => {

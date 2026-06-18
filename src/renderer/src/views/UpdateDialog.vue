@@ -20,6 +20,7 @@ import {
   useMessage,
 } from 'naive-ui';
 import { getApi } from '../api';
+import { SNOOZE_DURATION_MS } from '@core/constants';
 
 export interface PromptData {
   hash: string;
@@ -29,6 +30,8 @@ export interface PromptData {
   isLocked: boolean;
   lockSnapshotTimestamp: string | null;
 }
+
+const snoozeLabel = `${SNOOZE_DURATION_MS / 60_000} 分钟后再问`;
 
 const show = ref(false);
 const promptData = ref<PromptData | null>(null);
@@ -70,7 +73,7 @@ async function onSnooze() {
   deciding.value = true;
   await getApi().$invoke('user:decide', 'snooze', promptData.value.hash);
   show.value = false;
-  message.info('5 分钟后重新检测');
+  message.info(snoozeLabel);
   deciding.value = false;
 }
 
@@ -133,7 +136,7 @@ defineExpose({ showPrompt });
           :loading="deciding"
           @click="onSnooze"
         >
-          5 分钟后再问
+          {{ snoozeLabel }}
         </n-button>
         <n-button
           :loading="deciding"
