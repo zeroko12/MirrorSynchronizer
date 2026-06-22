@@ -40,6 +40,12 @@ export interface SchedulerEventDeps {
   historyDB: HistoryDB | null;
   currentConfig: () => AppConfig | null;
   getMainWindow: () => BrowserWindow | null;
+  /**
+   * 同步前的 popup 抑制判定(由 main 注入)
+   * 返回 true 时本次 sync 跳过本地 popup 弹窗
+   * 用于:远程"立即同步"触发的 sync 不应再弹本地弹窗
+   */
+  shouldSkipPopup?: () => boolean;
 }
 
 /**
@@ -66,12 +72,16 @@ export function buildOnSyncHandler(deps: SchedulerEventDeps): (r: SyncResult) =>
     // 2. 托盘状态 + 致命错误 Toast
     if (r.fatalError) {
       setActivityState('error');
-      const status = getScheduler()?.getStatus();
-      handleFatalErrorToast(
-        r.fatalReason ?? 'unknown',
-        status?.consecutiveNetworkFailures ?? 0,
-        status?.nextRunDelayMs ?? null,
-      );
+      if (!deps.shouldSkipPopup?.()) {
+        const status = getScheduler()?.getStatus();
+        handleFatalErrorToast(
+          r.fatalReason ?? 'unknown',
+          status?.consecutiveNetworkFailures ?? 0,
+          status?.nextRunDelayMs ?? null,
+        );
+      } else {
+        log.info('[scheduler-events] 远程触发,跳过 fatal toast');
+      }
     } else {
       if (getWasNetworkDown()) {
         setWasNetworkDown(false);
@@ -84,8 +94,12 @@ export function buildOnSyncHandler(deps: SchedulerEventDeps): (r: SyncResult) =>
       }
     }
 
-    // 3. 弹窗决策
-    void handlePopupDecision(r, stateMgr, getMainWindow);
+    // 3. 弹窗决策(远程触发的 sync 可抑制)
+    if (!deps.shouldSkipPopup?.()) {
+      void handlePopupDecision(r, stateMgr, getMainWindow);
+    } else {
+      log.info('[scheduler-events] 远程触发,跳过本地 popup');
+    }
 
     // 4. 写历史
     void writeHistory(r, historyDB, currentConfig);

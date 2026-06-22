@@ -23,6 +23,12 @@ const DEFAULT_CONFIG: AppConfig = {
   autostart: false,
   applyMappingsImmediately: true,
   fileMappings: [],
+  remote: {
+    enabled: true,           // 默认开启
+    port: 9527,              // 默认端口
+    passwordHash: '',        // 首次启动时生成
+    autoDiscover: true,      // 默认开 mDNS
+  },
 };
 
 export class ConfigManager {
@@ -89,6 +95,9 @@ export class ConfigManager {
       fileMappings: Array.isArray(partial.fileMappings)
         ? partial.fileMappings.map((m) => ({ ...m }))
         : [...this.defaults.fileMappings],
+      remote: partial.remote
+        ? { ...this.defaults.remote!, ...partial.remote }
+        : { ...this.defaults.remote! },
     };
   }
 

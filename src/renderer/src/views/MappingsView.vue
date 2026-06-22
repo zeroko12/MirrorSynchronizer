@@ -414,19 +414,21 @@ const columns: DataTableColumns<FileMapping> = [
           <n-input v-model:value="form.name" placeholder="例:本地配置覆盖" />
         </n-form-item>
         <n-form-item label="源文件(本地 / SMB / HTTP / WebDAV)">
-          <n-space :wrap="false">
+          <n-space :wrap="false" :size="8" style="width: 100%">
             <n-input
               v-model:value="form.sourcePath"
               :placeholder="sourcePathPlaceholder"
-              style="width: 460px"
+              style="flex: 1; min-width: 0"
             />
             <n-button
               v-if="!isRemoteSourcePath"
+              :focusable="false"
               @click="pickSource"
             >浏览…</n-button>
             <n-button
               type="primary"
               ghost
+              :focusable="false"
               :loading="sourceTestState.loading"
               @click="onTestSourceMapping"
             >测试</n-button>

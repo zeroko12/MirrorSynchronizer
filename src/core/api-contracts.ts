@@ -219,3 +219,16 @@ export interface SourceTestResult {
 /** 同步结果(可序列化版本,跨 IPC 传输) */
 export type SyncResultWire = SyncResult;
 export type AppConfigWire = AppConfig;
+
+/* ============================ 远程访问 ============================ */
+
+export interface RemoteAccessInfo {
+  enabled: boolean;
+  running: boolean;
+  url: string | null;
+  port: number | null;
+  /** 首次启动的初始密码(明文,展示一次后用户复制) */
+  initialPassword: string | null;
+  passwordReset: boolean;
+  clientCount: number;
+}

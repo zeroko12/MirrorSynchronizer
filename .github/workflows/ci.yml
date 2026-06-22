@@ -3,10 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
-    tags:
-      - 'v*'
+    tags: ['v*']
   pull_request:
     branches: [main]
+  # 手动触发入口 — 用于不打 tag 的全平台 dry-run
+  workflow_dispatch:
 
 # 同一个 PR 取消上一次还没跑完的,省资源
 concurrency:
@@ -14,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ---- 单元测试 + 类型检查(Linux,快)----
+  # ---- 单元测试 + 类型检查(Linux,快,所有 push/PR 都跑)----
   lint-and-test:
     name: Lint & Test (ubuntu)
     runs-on: ubuntu-latest
@@ -36,14 +37,50 @@ jobs:
       - name: Vitest
         run: npm test
 
-  # ---- Windows 打包(只在 main push 或 v* tag push 时跑,PR 太贵)----
-  package-windows:
-    name: Package Windows (windows-latest)
-    runs-on: windows-latest
-    if: |
-      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) &&
-      github.event_name == 'push'
+  # ---- 5 端打包(打 v* tag 时跑;手动 trigger 也跑)----
+  package:
+    name: Package (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
     needs: lint-and-test
+    if: |
+      (startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push') ||
+      github.event_name == 'workflow_dispatch'
+    strategy:
+      # 单平台失败不影响其他平台产物(Windows 编挂了 Linux 还能发)
+      fail-fast: false
+      matrix:
+        include:
+          # Windows x64 NSIS .exe
+          - os: windows-latest
+            label: windows-x64
+            script: build:win
+            artifact: auto-updater-windows-x64
+            artifact_glob: 'release/windows-x64/**/*.exe'
+          # macOS Apple Silicon (M1/M2/M3/M4)
+          - os: macos-14
+            label: macos-arm64
+            script: build:mac:arm64
+            artifact: auto-updater-macos-arm64
+            artifact_glob: 'release/macos-arm64/*'
+          # macOS Intel
+          - os: macos-13
+            label: macos-x64
+            script: build:mac:x64
+            artifact: auto-updater-macos-x64
+            artifact_glob: 'release/macos-x64/*'
+          # Linux x64 AppImage
+          - os: ubuntu-latest
+            label: linux-x64
+            script: build:linux
+            artifact: auto-updater-linux-x64
+            artifact_glob: 'release/linux-x64/*.AppImage'
+          # Linux ARM64 AppImage(树莓派 / ARM 服务器 / Graviton)
+          # ubuntu-22.04-arm 是 GitHub-hosted ARM64 runner (AWS Graviton)
+          - os: ubuntu-22.04-arm
+            label: linux-arm64
+            script: build:linux:arm64
+            artifact: auto-updater-linux-arm64
+            artifact_glob: 'release/linux-arm64/*.AppImage'
     steps:
       - uses: actions/checkout@v4
 
@@ -54,44 +91,65 @@ jobs:
           cache: 'npm'
 
       # 国内镜像绕开 Electron / electron-builder 拉资源时的 TLS 抖动
-      # 西方 IP 直接用默认值即可,有需要可加 env override
       - name: Install dependencies
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
           ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
         run: npm ci
 
-      - name: Build
+      # better-sqlite3 是 native 模块 — 必须针对当前 Electron ABI 重编
+      # 否则在打包出的 app 里加载会报 NODE_MODULE_VERSION 不匹配
+      - name: Rebuild native modules for Electron
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
           ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
-        run: npm run build:win
+        run: npx electron-builder install-app-deps
 
-      - name: Upload installer artifact
+      # electron-vite build(产物在 out/) + electron-builder
+      # --config.directories.output 让 electron-builder 输出到平台专属子目录
+      # 避免本地多平台调试时不同 runner 产物互相覆盖(虽然 CI 是各自独立 runner)
+      - name: Build installer
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+        run: |
+          npm run ${{ matrix.script }} -- --config.directories.output=release/${{ matrix.label }}
+        shell: bash
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: auto-updater-windows-installer
-          path: release/*.exe
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact_glob }}
           if-no-files-found: error
           retention-days: 14
 
-  # ---- GitHub Release(只在打 tag 时跑)----
+  # ---- GitHub Release(只在打 v* tag 时跑;手动 trigger 不发 Release)----
   release:
     name: GitHub Release
     runs-on: ubuntu-latest
-    needs: package-windows
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: auto-updater-windows-installer
           path: dist
+
+      # 各 matrix job 的 artifact 都在 dist/<artifact-name>/ 下
+      # 把所有文件拍平到 dist/ 根,GitHub Release 一并发布
+      - name: Flatten artifacts into dist/
+        run: |
+          cd dist
+          find . -mindepth 2 -type f -exec mv {} . \;
+          find . -mindepth 1 -type d -empty -delete
+          echo "--- release assets ---"
+          ls -la
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.exe
+          files: dist/*
           generate_release_notes: true
           draft: false

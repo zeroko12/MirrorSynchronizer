@@ -2,6 +2,28 @@
 
 监控源目录(实际使用中通常是挂载的 SMB 共享盘)变更,镜像同步到目标目录,带 N 版备份、一键回退、文件映射规则、开机自启、更新弹框。
 
+## 下载
+
+去 [Releases 页](https://github.com/zeroko12/auto-updater/releases) 选最新 `v*` tag 的资产:
+
+| 平台 | 架构 | 文件 | 启动 |
+|------|------|------|------|
+| Windows | x64 | `自动更新检测-<version>-x64.exe` | 双击运行 NSIS 安装包 |
+| macOS | Apple Silicon (M1/M2/M3) | `自动更新检测-<version>-arm64.dmg` | 双击 dmg 拖入 Applications,首次启动需 **右键 → 打开** |
+| macOS | Intel | `自动更新检测-<version>.dmg` | 同上 |
+| Linux | x64 | `自动更新检测-<version>.AppImage` | `chmod +x *.AppImage && ./自动更新检测-<version>.AppImage` |
+| Linux | ARM64 (树莓派 / Graviton) | `自动更新检测-<version>-arm64.AppImage` | 同上 |
+
+> macOS 客户端 **未做代码签名**,首次启动会看到 Gatekeeper 警告。
+> 已经打开过一次后还想消除警告,运行:
+> ```bash
+> xattr -d com.apple.quarantine "/Applications/自动更新检测.app"
+> ```
+
+### 自动发布
+
+打 `v*` tag 推到 origin 后,GitHub Actions 会自动跑 5 个平台打包并合并到该 tag 的 Release。手动 dry-run(只下载不发布 Release)可以走 Actions → CI → Run workflow。
+
 ## 技术栈
 
 - **运行时**:Electron 33+ / Node 22

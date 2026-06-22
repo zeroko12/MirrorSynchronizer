@@ -31,7 +31,8 @@ export function createWindow(): void {
     minWidth: 600,
     minHeight: 400,
     show: false,
-    autoHideMenuBar: true,
+    // 不自动隐藏 — 顶部"关于"菜单用户得能直接看到
+    autoHideMenuBar: false,
     title: APP_DISPLAY_NAME,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),

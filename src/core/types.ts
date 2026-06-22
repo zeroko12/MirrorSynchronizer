@@ -116,6 +116,25 @@ export interface AppConfig {
   applyMappingsImmediately?: boolean;
   /** 文件映射规则 */
   fileMappings: FileMapping[];
+  /**
+   * 远程服务器(同 LAN 浏览器访问,只读 + 弹窗决策)
+   * v0.1:仅暴露状态/历史/备份,允许远程确认弹窗;远程编辑 config 在 v0.2
+   * 默认开启,密码随机生成 + bcrypt 存盘
+   */
+  remote?: RemoteConfig;
+}
+
+export interface RemoteConfig {
+  /** 是否启用远程服务器 */
+  enabled: boolean;
+  /** 监听端口 */
+  port: number;
+  /** bcrypt 哈希后的密码(明文不存盘) */
+  passwordHash: string;
+  /** 是否开启 mDNS / 服务广播(LAN 自动发现) */
+  autoDiscover: boolean;
+  /** 生成的初始密码(明文,仅首次启动后展示给用户一次;之后清空) */
+  initialPassword?: string;
 }
 
 /**
