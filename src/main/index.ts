@@ -31,6 +31,9 @@ import { createTray } from './services/tray.js';
 import { handleUserDecision } from './services/user-decision.js';
 import { buildOnSyncHandler } from './services/scheduler-events.js';
 import { scanWithTimeout } from './services/scan-timeout.js';
+import { setAppMenu } from './services/app-menu.js';
+import { createRemoteManager, type RemoteManager, type RemoteAccessInfo, listNetworkIPs } from './services/remote/manager.js';
+import { decide } from '../core/detector.js';
 
 const log = mainLog;
 const { app, BrowserWindow, dialog, ipcMain } = electron;
@@ -39,7 +42,18 @@ let currentConfig: AppConfig | null = null;
 let historyDB: HistoryDB | null = null;
 let stateMgr: StateManager | null = null;
 let scheduler: Scheduler | null = null;
+let remote: RemoteManager | null = null;
+let pendingPopup: import('./services/remote/state-provider.js').RemoteState['pendingPopup'] = null;
+let remoteInfo: RemoteAccessInfo | null = null;
+let suppressNextLocalPopup = false;
 const backupper = new Backupper();
+
+/** 写回 config(用于 remote 首次生成密码后) */
+async function saveConfig(): Promise<void> {
+  if (!currentConfig) return;
+  const mgr = new ConfigManager({ configPath: getConfigPath(), defaults: DEFAULT_CONFIG });
+  await mgr.save(currentConfig);
+}
 
 async function ensureConfig(): Promise<AppConfig> {
   const cfgPath = getConfigPath();
@@ -82,8 +96,17 @@ function registerIpc(): void {
   });
 
   ipcMain.handle('sync:runNow', async () => {
+    // 保留 dryRun 语义 — 托盘"立即检查一次"、通用检查入口
     if (!scheduler) return { ok: false, error: 'scheduler not ready' };
     const result = await scheduler.runNow();
+    return { ok: true, result };
+  });
+
+  ipcMain.handle('sync:runNowForce', async () => {
+    // 强制真同步 — 即便弹窗模式也真删真拷,用于"保存并立即同步"按钮
+    // (语义跟本地弹窗"应用"按钮和远程"立即同步"一致:用户主动要求立刻落盘)
+    if (!scheduler) return { ok: false, error: 'scheduler not ready' };
+    const result = await scheduler.runNow({ force: true });
     return { ok: true, result };
   });
 
@@ -359,6 +382,68 @@ function registerIpc(): void {
   });
 
   // 源测试(只读,不改 config)
+  // 远程访问信息(renderer 端显示)
+  ipcMain.handle('remote:getInfo', () => remoteInfo);
+
+  // 列出所有可用 IPv4(给用户多网卡时选)
+  ipcMain.handle('remote:listIPs', () => listNetworkIPs());
+
+  // 切换远程访问开/关
+  ipcMain.handle('remote:setEnabled', async (_e, enabled: boolean) => {
+    if (typeof enabled !== 'boolean') {
+      return { ok: false, error: 'enabled 必须是 boolean' };
+    }
+    if (!currentConfig?.remote) {
+      return { ok: false, error: 'config 不存在' };
+    }
+    if (currentConfig.remote.enabled === enabled) {
+      return { ok: true }; // idempotent
+    }
+    currentConfig.remote.enabled = enabled;
+    await saveConfig();
+    if (enabled) {
+      if (remote && !remote.isRunning()) {
+        try {
+          remoteInfo = await remote.start();
+        } catch (err) {
+          log.error(`[remote] setEnabled(true) start 失败: ${(err as Error).message}`);
+        }
+      }
+    } else {
+      if (remote && remote.isRunning()) {
+        await remote.stop();
+        remoteInfo = remote.getInfo();
+      }
+    }
+    return { ok: true, info: remoteInfo };
+  });
+
+  // 重置远程访问密码
+  ipcMain.handle('remote:resetPassword', async () => {
+    if (!remote) {
+      return { ok: false, error: '远程服务未启动' };
+    }
+    try {
+      const { newPassword, info } = await remote.resetPassword();
+      remoteInfo = info;
+      await saveConfig();
+      log.info('[remote] 密码已重置');
+      return { ok: true, newPassword, info };
+    } catch (err) {
+      log.error(`[remote] resetPassword 失败: ${(err as Error).message}`);
+      return { ok: false, error: (err as Error).message };
+    }
+  });
+
+  // 在系统默认浏览器打开 URL(给 web UI 跳浏览器用)
+  ipcMain.handle('shell:openExternal', async (_e, url: string) => {
+    if (typeof url !== 'string' || !url.startsWith('http')) {
+      return;
+    }
+    const { shell } = electron;
+    await shell.openExternal(url);
+  });
+
   ipcMain.handle('source:test', async (_e, source: string) => {
     const startedAt = Date.now();
     if (!source || !source.trim()) {
@@ -461,21 +546,61 @@ app.whenReady().then(async () => {
   log.info(`[main] state at ${getStatePath()}`);
 
   registerIpc();
+  setAppMenu();
   createWindow();
-  createTray({ onRunNow: () => scheduler?.runNow() });
+  createTray({
+    onRunNow: () => scheduler?.runNow(),
+    getRemoteInfo: () => remoteInfo,
+  });
+
+  const baseOnSync = buildOnSyncHandler({
+    getScheduler: () => scheduler,
+    stateMgr,
+    historyDB,
+    currentConfig: () => currentConfig,
+    getMainWindow,
+    shouldSkipPopup: () => suppressNextLocalPopup,
+  });
 
   scheduler = new Scheduler({
     config: currentConfig,
     indexCachePath: getIndexCachePath(),
-    onSync: buildOnSyncHandler({
-      getScheduler: () => scheduler,
-      stateMgr,
-      historyDB,
-      currentConfig: () => currentConfig,
-      getMainWindow,
-    }),
+    onSync: async (r) => {
+      const wasRemoteSuppressed = suppressNextLocalPopup;
+      await baseOnSync(r);
+      if (wasRemoteSuppressed) suppressNextLocalPopup = false;
+      // 让 remote 也能吃到这次同步
+      if (remote) {
+        // 算 pendingPopup 状态(用同样的 detector)
+        const state = stateMgr ? await stateMgr.load() : null;
+        const decision = state
+          ? decide({
+              result: r,
+              lastShownChangeHash: state.lastShownChangeHash,
+              popupEnabled: state.popupEnabled,
+              snoozeUntil: state.snoozeUntil,
+              isPostRollbackLockActive: !!state.postRollbackLock,
+            })
+          : null;
+        if (decision && decision.kind !== 'silent') {
+          pendingPopup = {
+            hash: decision.fingerprint.hash,
+            addedCount: decision.fingerprint.addedCount,
+            modifiedCount: decision.fingerprint.modifiedCount,
+            deletedCount: decision.fingerprint.deletedCount,
+            isLocked: decision.kind === 'locked-detect',
+            lockSnapshotTimestamp: state?.postRollbackLock?.snapshotTimestamp ?? null,
+          };
+        } else {
+          // 弹窗关闭(可能本地决断了)
+          pendingPopup = null;
+        }
+        remote.onSyncResult(r);
+        remote.onPopupClosed(pendingPopup ? '' : 'latest'); // 实际 hash 由 onSyncResult 推 snapshot
+      }
+    },
     onFatalError: (n) => {
-      log.error(`[scheduler] 连续失败 ${n} 次`);
+      log.error(`[scheduler] 连续失败 ${n} 次}`);
     },
   });
 
@@ -483,6 +608,9 @@ app.whenReady().then(async () => {
   scheduler.setDryRunMode(initialState.popupEnabled);
   scheduler.start();
   log.info(`[scheduler] 已启动,立即跑一次,然后每 ${currentConfig.intervalSec}s 一次 · dryRun=${initialState.popupEnabled}`);
+
+  // 启动远程访问(如果启用)
+  await startRemoteIfEnabled();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -507,3 +635,71 @@ app.on('before-quit', async (e) => {
     app.quit();
   }
 });
+
+/* ============================ 远程访问 ============================ */
+
+async function startRemoteIfEnabled(): Promise<void> {
+  if (!currentConfig?.remote?.enabled) return;
+  remote = createRemoteManager({
+    getConfig: () => currentConfig,
+    getHistoryDB: () => historyDB,
+    getScheduler: () => scheduler,
+    getPendingPopup: () => pendingPopup,
+    onRemoteDecision: async (action, hash) => {
+      if (!stateMgr) return 'no-op';
+      await handleUserDecision(stateMgr, scheduler, action, hash);
+      pendingPopup = null;
+      return 'applied';
+    },
+    onRemoteRunNow: async () => {
+      if (!scheduler) {
+        log.warn('[main] onRemoteRunNow: scheduler 不存在');
+        return null;
+      }
+      log.info('[main] onRemoteRunNow: 远程触发同步(force)');
+      // 标记下一次 sync 跳过本地 popup + fatal toast(远程已主动确认,本地不打扰)
+      suppressNextLocalPopup = true;
+      // force=true:即便当前是弹窗询问模式(popupEnabled=true → dryRunMode=true),
+      // 远程"立即同步"也是用户主动行为,必须真同步(拷贝/删除/落盘索引)。
+      // 之前这里没传 force,导致 dryRun 模式下删除被吞,history 写了但 target 没动。
+      const result = await scheduler.runNow({ force: true });
+      log.info(`[main] onRemoteRunNow: 同步完成 ok=${result?.ok} fatal=${!!result?.fatalError} added=${result?.added.length ?? 0} deleted=${result?.deleted.length ?? 0}`);
+      // 主动推 snapshot + sync-result,确保 web UI 立即看到新 history
+      if (remote) {
+        try {
+          const { getRemoteState } = await import('./services/remote/state-provider.js');
+          const snapshot = getRemoteState({
+            config: () => currentConfig,
+            historyDB: () => historyDB,
+            scheduler: () => scheduler,
+            pendingPopup: () => null,
+            appName: '自动更新检测',
+            appVersion: app.getVersion(),
+          });
+          remote.broadcast({ type: 'snapshot', data: snapshot });
+          remote.broadcast({ type: 'sync-result', data: result });
+        } catch (err) {
+          log.warn('[main] runNow 后 broadcast 失败:', err);
+        }
+      }
+      return result;
+    },
+    appName: '自动更新检测',
+    appVersion: app.getVersion(),
+    configPath: getConfigPath(),
+  });
+  try {
+    remoteInfo = await remote.start();
+    if (remoteInfo.passwordReset) {
+      log.info(`[remote] 首次启动,密码已生成(显示在托盘菜单): ${remoteInfo.initialPassword}`);
+      // 密码需要写盘
+      await saveConfig();
+    }
+    // 监听同步事件 → 推送给远程 client
+    // (这里用 monkey-patch 风格:scheduler.start 后我们 hook 进 onSync)
+  } catch (err) {
+    log.error(`[remote] 启动失败: ${(err as Error).message}`);
+    remote = null;
+    remoteInfo = null;
+  }
+}

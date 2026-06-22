@@ -17,6 +17,7 @@ import type {
   HistoryDeleteResult,
   HistoryListResult,
   MappingsApplyResult,
+  RemoteAccessInfo,
   SaveConfigResult,
   SelectFolderResult,
   SelectPathResult,
@@ -41,6 +42,7 @@ export type {
   HistoryItem,
   HistoryListResult,
   MappingsApplyResult,
+  RemoteAccessInfo,
   SaveConfigResult,
   SelectFolderResult,
   SelectPathResult,
@@ -61,6 +63,10 @@ declare global {
     api: {
       getStatus: () => Promise<StatusInfo>;
       runSyncNow: () => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+      /**
+       * 强制真同步 — 即便弹窗模式也立刻真删真拷。用于"保存并立即同步"按钮。
+       */
+      runSyncNowForce: () => Promise<{ ok: boolean; result?: unknown; error?: string }>;
       loadConfig: () => Promise<AppConfig>;
       saveConfig: (config: AppConfig) => Promise<SaveConfigResult>;
       selectFolder: (defaultPath?: string) => Promise<SelectFolderResult>;
@@ -80,6 +86,11 @@ declare global {
       mappingsApplyAll: () => Promise<MappingsApplyResult>;
       mappingsTestOne: (id: string) => Promise<MappingsApplyResult>;
       sourceTest: (source: string) => Promise<SourceTestResult>;
+      getRemoteInfo: () => Promise<RemoteAccessInfo | null>;
+      setRemoteEnabled: (enabled: boolean) => Promise<{ ok: boolean; error?: string; info?: RemoteAccessInfo | null }>;
+      resetRemotePassword: () => Promise<{ ok: boolean; error?: string; newPassword?: string; info?: RemoteAccessInfo | null }>;
+      listNetworkIPs: () => Promise<Array<{ name: string; address: string; family: 'IPv4' | 'IPv6'; internal: boolean; mac: string }>>;
+      openExternal: (url: string) => Promise<void>;
       onUpdatePrompt: (callback: (payload: UpdatePromptPayload) => void) => () => void;
       $invoke: (channel: string, ...args: unknown[]) => Promise<{ ok: boolean; error?: string; [k: string]: unknown }>;
     };

@@ -16,6 +16,7 @@ import type {
   HistoryDeleteResult,
   HistoryListResult,
   MappingsApplyResult,
+  RemoteAccessInfo,
   SaveConfigResult,
   SelectFolderResult,
   SelectPathResult,
@@ -31,6 +32,12 @@ const api = {
   getStatus: (): Promise<StatusInfo> => ipcRenderer.invoke('status:get'),
   runSyncNow: (): Promise<{ ok: boolean; result?: unknown; error?: string }> =>
     ipcRenderer.invoke('sync:runNow'),
+  /**
+   * 强制真同步 — 即便弹窗模式也立刻真删真拷。用于"保存并立即同步"按钮。
+   * 语义跟远程"立即同步"和本地弹窗"应用"按钮一致。
+   */
+  runSyncNowForce: (): Promise<{ ok: boolean; result?: unknown; error?: string }> =>
+    ipcRenderer.invoke('sync:runNowForce'),
   loadConfig: (): Promise<unknown> => ipcRenderer.invoke('config:load'),
   saveConfig: (config: unknown): Promise<SaveConfigResult> =>
     ipcRenderer.invoke('config:save', config),
@@ -87,6 +94,17 @@ const api = {
 
   // 源测试(只读,不改 config)
   sourceTest: (source: string): Promise<SourceTestResult> => ipcRenderer.invoke('source:test', source),
+
+  // 远程访问信息
+  getRemoteInfo: (): Promise<RemoteAccessInfo | null> => ipcRenderer.invoke('remote:getInfo'),
+  setRemoteEnabled: (enabled: boolean): Promise<{ ok: boolean; error?: string; info?: RemoteAccessInfo | null }> =>
+    ipcRenderer.invoke('remote:setEnabled', enabled),
+  resetRemotePassword: (): Promise<{ ok: boolean; error?: string; newPassword?: string; info?: RemoteAccessInfo | null }> =>
+    ipcRenderer.invoke('remote:resetPassword'),
+  listNetworkIPs: (): Promise<Array<{ name: string; address: string; family: 'IPv4' | 'IPv6'; internal: boolean; mac: string }>> =>
+    ipcRenderer.invoke('remote:listIPs'),
+  // 在系统默认浏览器打开 URL
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
 
   // 监听主进程推送的"需要弹窗确认"事件
   onUpdatePrompt: (callback: (payload: UpdatePromptPayload) => void): (() => void) => {

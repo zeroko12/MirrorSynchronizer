@@ -3,9 +3,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { promises as fs } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Scheduler, computeBackoff } from '../src/core/scheduler.js';
-import { makeTempDir, rmTemp, writeTree, wait } from './helpers.js';
+import { makeTempDir, rmTemp, writeTree, writeFile, wait } from './helpers.js';
 import type { AppConfig, SyncResult } from '../src/core/types.js';
 
 describe('Scheduler', () => {
@@ -89,6 +91,56 @@ describe('Scheduler', () => {
     const count = results.length;
     await wait(1300);
     expect(results.length).toBe(count);
+  });
+
+  // 回归:远程"立即同步"在弹窗模式下应该真删,而不是只算 diff
+  // (修复前:dryRun 模式吞了 delete,history 写了 deletedCount=1,但 target 里文件还在)
+  it('runNow({ force: true }) 在 dryRun 模式下也会真删文件', async () => {
+    await writeTree(sourceDir, [{ relPath: 'a.txt', content: 'a' }]);
+    const sch = new Scheduler({ config, indexCachePath });
+    sch.setDryRunMode(true); // 模拟 popupEnabled=true
+
+    // 首次 dryRun 同步:diff 出来(在 dryRun 下,这次同步把 a.txt 拷到 target,
+    // 因为 syncer 的 ADD/MODIFY/DELETE 都受 dryRun 影响,但文件映射不受 dryRun 影响;
+    // 这里没有 mapping,所以 target 不会有 a.txt)
+    await sch.runNow();
+
+    // 让 a.txt 已经在 target(用真实拷贝,模拟首次非 dryRun 同步的状态)
+    await writeFile(join(targetDir, 'a.txt'), 'a');
+    await sch.runNow(); // dryRun:added 不算(target 已有 a.txt),正常 → unchanged=1
+
+    // 源里删除 a.txt
+    await fs.unlink(join(sourceDir, 'a.txt'));
+
+    // 不带 force:dryRun 跑一次 → diff 算出来 deleted=['a.txt'],但 target 里不动
+    const r1 = await sch.runNow();
+    expect(r1!.deleted).toEqual(['a.txt']);
+    expect(existsSync(join(targetDir, 'a.txt'))).toBe(true);
+
+    // 带 force:真删(修复点)
+    const r2 = await sch.runNow({ force: true });
+    expect(r2!.deleted).toEqual(['a.txt']);
+    expect(existsSync(join(targetDir, 'a.txt'))).toBe(false);
+  });
+
+  it('runNow({ force: true }) 跑完恢复 dryRunMode', async () => {
+    const sch = new Scheduler({ config, indexCachePath });
+    sch.setDryRunMode(true); // dryRun
+
+    // force 跑一次:过程中临时 false,跑完必须还原
+    await writeTree(sourceDir, [{ relPath: 'x.txt', content: 'x' }]);
+    await sch.runNow({ force: true });
+    expect(existsSync(join(targetDir, 'x.txt'))).toBe(true);
+
+    // 再跑一次普通 runNow:必须仍是 dryRun(只 diff 不动盘)
+    await writeTree(sourceDir, [
+      { relPath: 'x.txt', content: 'x' },
+      { relPath: 'y.txt', content: 'y' },
+    ]);
+    await fs.unlink(join(targetDir, 'x.txt')).catch(() => undefined);
+    await sch.runNow();
+    // dryRun:y.txt 算 added 但不会真拷,x.txt 算 added(target 已删)也不会真拷
+    expect(existsSync(join(targetDir, 'y.txt'))).toBe(false);
   });
 });
 

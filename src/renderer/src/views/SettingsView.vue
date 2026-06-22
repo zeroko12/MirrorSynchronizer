@@ -15,6 +15,7 @@ import { usePolling } from '../composables/usePolling';
 import {
   NAlert,
   NButton,
+  NCard,
   NDataTable,
   NForm,
   NFormItem,
@@ -29,7 +30,7 @@ import {
   NTag,
   useMessage,
 } from 'naive-ui';
-import type { SourceTestResult, StatusInfo } from '../api';
+import type { RemoteAccessInfo, SourceTestResult, StatusInfo } from '../api';
 import { getApi } from '../api';
 import { useConfig } from '../composables/useConfig';
 import { labelOf, adviceOf } from '@core/labels';
@@ -64,6 +65,132 @@ const savingRef = ref(false);
 const lastError = ref<string | null>(null);
 const lastSuccessAt = ref<number | null>(null);
 const fileCount = ref<{ source: number; target: number; sourcePath: string; targetPath: string } | null>(null);
+const remoteInfo = ref<RemoteAccessInfo | null>(null);
+const networkIPs = ref<Array<{ name: string; address: string; family: string; internal: boolean; mac: string }>>([]);
+const togglingRemote = ref(false);
+const resettingPassword = ref(false);
+const newlyResetPassword = ref<string | null>(null);
+
+/**
+ * "高级模式"开关 — 默认 false
+ * 唤出方式:点版本号 5 下(3 秒内) 或 Shift+Ctrl+L
+ * 关闭方式:同样手势
+ * 状态不持久化(每次启动需重新唤出)
+ */
+const advancedMode = ref(false);
+let versionClickCount = 0;
+let versionClickTimer: number | null = null;
+
+function onVersionClick() {
+  versionClickCount += 1;
+  if (versionClickTimer) {
+    clearTimeout(versionClickTimer);
+  }
+  versionClickTimer = window.setTimeout(() => {
+    versionClickCount = 0;
+    versionClickTimer = null;
+  }, 3000);
+  if (versionClickCount >= 5) {
+    versionClickCount = 0;
+    if (versionClickTimer) {
+      clearTimeout(versionClickTimer);
+      versionClickTimer = null;
+    }
+    toggleAdvanced();
+  }
+}
+
+function toggleAdvanced() {
+  advancedMode.value = !advancedMode.value;
+  if (advancedMode.value) {
+    message.info('已开启高级模式');
+    // 进入高级模式时主动拉一次
+    void loadNetworkIPs();
+  } else {
+    message.info('已关闭高级模式');
+  }
+}
+
+function onGlobalKeydown(e: KeyboardEvent) {
+  // Shift+Ctrl+L 切换高级模式
+  if (e.shiftKey && e.ctrlKey && (e.key === 'L' || e.key === 'l')) {
+    e.preventDefault();
+    toggleAdvanced();
+  }
+}
+
+async function loadNetworkIPs() {
+  const ips = await tryLog('listNetworkIPs', () => getApi().listNetworkIPs());
+  if (ips) networkIPs.value = ips;
+}
+
+/** 推导出当前 server 实际绑定的主机(host 部分) */
+const currentRemoteHost = computed(() => {
+  if (!remoteInfo.value?.url) return null;
+  try {
+    return new URL(remoteInfo.value.url).hostname;
+  } catch {
+    return null;
+  }
+});
+
+function buildRemoteUrl(host: string): string {
+  const port = remoteInfo.value?.port ?? 9527;
+  return `http://${host}:${port}`;
+}
+
+async function copyUrl(url: string) {
+  try {
+    await navigator.clipboard.writeText(url);
+    message.success(`已复制 ${url}`);
+  } catch {
+    message.error('复制失败');
+  }
+}
+
+async function openExternal(url: string) {
+  await getApi().openExternal(url);
+}
+
+async function onToggleRemote(enabled: boolean) {
+  togglingRemote.value = true;
+  try {
+    const result = await getApi().setRemoteEnabled(enabled);
+    if (result.ok && result.info) {
+      remoteInfo.value = result.info;
+      message.success(enabled ? '已启用远程访问' : '已停用远程访问');
+    } else {
+      message.error(result.error ?? '操作失败');
+    }
+  } finally {
+    togglingRemote.value = false;
+  }
+}
+
+async function onResetPassword() {
+  if (!confirm('重置密码会断开所有远程客户端连接,确定吗?')) return;
+  resettingPassword.value = true;
+  try {
+    const result = await getApi().resetRemotePassword();
+    if (result.ok && result.newPassword) {
+      newlyResetPassword.value = result.newPassword;
+      if (result.info) remoteInfo.value = result.info;
+      message.success('密码已重置');
+    } else {
+      message.error(result.error ?? '重置失败');
+    }
+  } finally {
+    resettingPassword.value = false;
+  }
+}
+
+function copyNewPassword() {
+  if (!newlyResetPassword.value) return;
+  void copyUrl(newlyResetPassword.value).then(() => {
+    // 复制后 5 秒自动清掉显示(防呆)
+    setTimeout(() => { newlyResetPassword.value = null; }, 5000);
+  });
+}
 
 /** 距下次同步的剩余秒数(用于倒计时显示) */
 const retryCountdown = ref(0);
@@ -224,6 +351,8 @@ onMounted(async () => {
     refreshStatus();
   });
   // 5 秒轮询由下面的 usePolling 在 onMounted 自动启动
+  // 全局键盘监听(高级模式切换)
+  window.addEventListener('keydown', onGlobalKeydown);
 });
 
 async function onTogglePopup(enabled: boolean) {
@@ -267,12 +396,36 @@ onUnmounted(() => {
     clearInterval(countdownTimer);
     countdownTimer = null;
   }
+  if (versionClickTimer) {
+    clearTimeout(versionClickTimer);
+    versionClickTimer = null;
+  }
+  window.removeEventListener('keydown', onGlobalKeydown);
 });
 
 /** 5 秒轮询状态(usePolling 内部自动管理 onMounted/onUnmounted) */
 usePolling(() => {
   refreshStatus();
 }, UI_STATUS_POLL_MS, { immediate: false });
+
+/** 10 秒轮询远程访问信息 */
+usePolling(() => {
+  void tryLog('getRemoteInfo', () => getApi().getRemoteInfo()).then((info) => {
+    remoteInfo.value = info ?? null;
+  });
+}, 10_000, { immediate: false });
+
+/* ============================ 远程访问操作 ============================ */
+
+async function copyInitialPassword() {
+  if (!remoteInfo.value?.initialPassword) return;
+  try {
+    await navigator.clipboard.writeText(remoteInfo.value.initialPassword);
+    message.success('已复制初始密码(请妥善保存)');
+  } catch {
+    message.error('复制失败');
+  }
+}
 
 async function refreshStatus() {
   const s = await tryLog('getStatus', () => getApi().getStatus());
@@ -309,7 +462,9 @@ async function onSave() {
 async function onSaveAndSync() {
   await onSave();
   if (canSave.value) {
-    const res = await getApi().runSyncNow();
+    // "保存并立即同步" 是用户主动行为,即便弹窗模式也要真同步
+    // (跟远程"立即同步"和本地弹窗"应用"按钮语义一致)
+    const res = await getApi().runSyncNowForce();
     if (res.ok) {
       message.success('立即同步已触发');
       await refreshStatus();
@@ -395,7 +550,7 @@ function formatTime(ts: number | null): string {
               </n-text>
             </template>
             <template v-else>
-              <n-text depth="3" style="font-size: 13px">尚未同步</n-text>
+              <n-text depth="3" style="font-size: 13px">等待首次同步</n-text>
             </template>
             <n-button text type="primary" size="tiny" @click="refreshStatus" style="margin-left: auto">
               刷新
@@ -542,6 +697,118 @@ function formatTime(ts: number | null): string {
 
         <n-divider />
 
+        <!-- 远程访问(高级模式,默认隐藏 — 点版本号 5 下 或 Shift+Ctrl+L 唤出) -->
+        <n-form-item
+          v-if="advancedMode"
+          label="远程访问(同 LAN 浏览器)"
+        >
+          <n-card size="small" :bordered="true" style="max-width: 720px">
+            <n-space vertical :size="10">
+              <!-- 开关 -->
+              <n-space align="center" justify="space-between">
+                <n-space align="center">
+                  <span>启用远程访问</span>
+                  <n-tag
+                    v-if="remoteInfo"
+                    :type="remoteInfo.running ? 'success' : 'default'"
+                    size="small"
+                  >
+                    {{ remoteInfo.running ? `运行中 · ${remoteInfo.clientCount} 个客户端` : '已停止' }}
+                  </n-tag>
+                </n-space>
+                <n-switch
+                  :value="remoteInfo?.enabled ?? false"
+                  :loading="togglingRemote"
+                  @update:value="onToggleRemote"
+                />
+              </n-space>
+
+              <template v-if="remoteInfo?.enabled">
+                <n-divider style="margin: 4px 0" />
+
+                <!-- 多 IP 列表 -->
+                <n-text depth="2" style="font-size: 12px">访问 URL(多网卡时选合适的):</n-text>
+                <n-space vertical :size="4">
+                  <div
+                    v-for="ip in networkIPs"
+                    :key="ip.address"
+                    style="display: flex; align-items: center; gap: 8px; padding: 4px 0;"
+                  >
+                    <n-tag size="small" :type="ip.address === currentRemoteHost ? 'success' : 'default'">
+                      {{ ip.name }}
+                    </n-tag>
+                    <span
+                      v-if="ip.address === currentRemoteHost"
+                      style="font-size: 11px; color: var(--primary);"
+                    >[当前]</span>
+                    <code style="font-size: 12px;">{{ buildRemoteUrl(ip.address) }}</code>
+                    <n-button
+                      size="tiny"
+                      ghost
+                      @click="copyUrl(buildRemoteUrl(ip.address))"
+                    >复制</n-button>
+                    <n-button
+                      v-if="ip.address !== currentRemoteHost"
+                      size="tiny"
+                      @click="openExternal(buildRemoteUrl(ip.address))"
+                    >打开</n-button>
+                  </div>
+                </n-space>
+                <n-text depth="3" style="font-size: 12px">
+                  💡 多网卡时选物理网卡(以太网 / Wi-Fi)而非虚拟网卡(VMWare / Hyper-V / VPN)。
+                </n-text>
+
+                <!-- 当前密码(常驻显示,有就显示;重置中隐藏避免两个框) -->
+                <n-alert
+                  v-if="remoteInfo.initialPassword && !newlyResetPassword"
+                  type="info"
+                  :show-icon="true"
+                >
+                  <template #header>当前密码(浏览器登录用)</template>
+                  <n-space align="center">
+                    <n-text code style="font-size: 13px">{{ remoteInfo.initialPassword }}</n-text>
+                    <n-button size="tiny" @click="copyInitialPassword">复制</n-button>
+                  </n-space>
+                  <n-text depth="3" style="font-size: 12px; display: block; margin-top: 6px">
+                    在同 LAN 设备的浏览器打开上面任一 URL,粘贴此密码登录。
+                  </n-text>
+                </n-alert>
+
+                <!-- 刚重置的新密码(临时高亮展示,5 秒后自动隐藏,初始密码框恢复) -->
+                <n-alert
+                  v-if="newlyResetPassword"
+                  type="success"
+                  :show-icon="true"
+                >
+                  <template #header>✓ 密码已重置(5 秒后自动隐藏,请立即复制)</template>
+                  <n-space align="center">
+                    <n-text code style="font-size: 14px; font-weight: 600">{{ newlyResetPassword }}</n-text>
+                    <n-button size="tiny" type="primary" @click="copyNewPassword">复制新密码</n-button>
+                  </n-space>
+                </n-alert>
+
+                <!-- 操作:重置密码 -->
+                <n-space align="center" justify="space-between">
+                  <n-text depth="3" style="font-size: 12px">
+                    忘记密码?重置会断开所有客户端。
+                  </n-text>
+                  <n-button
+                    size="small"
+                    :loading="resettingPassword"
+                    @click="onResetPassword"
+                  >重置密码</n-button>
+                </n-space>
+              </template>
+
+              <n-text v-else depth="3" style="font-size: 12px">
+                远程访问未启用。打开后,同 LAN 设备可通过浏览器访问并管理本机。
+              </n-text>
+            </n-space>
+          </n-card>
+        </n-form-item>
+
+        <n-divider />
+
         <!-- 支持的源类型(显式列出,免得用户不知道 WebDAV 也能用) -->
         <n-form-item label="支持的源类型">
           <n-space vertical :size="6" style="font-size: 12px; line-height: 1.8">
@@ -610,7 +877,16 @@ function formatTime(ts: number | null): string {
       </div>
     </n-spin>
 
-    <footer class="footer" />
+    <footer class="footer">
+      <n-text
+        depth="3"
+        style="font-size: 12px; cursor: pointer; user-select: none;"
+        @click="onVersionClick"
+      >
+        v0.2.0
+        <span v-if="advancedMode" style="color: var(--primary); margin-left: 6px">⚙</span>
+      </n-text>
+    </footer>
 
     <!-- 源测试结果 modal -->
     <n-modal

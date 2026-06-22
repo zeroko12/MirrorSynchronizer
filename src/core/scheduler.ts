@@ -14,6 +14,7 @@ import type { AppConfig, FileEntry, SchedulerStatus, SyncResult } from './types.
 import { isNetworkReason, type PathErrorKind } from './errors.js';
 import { atomicWriteJson } from './fs-utils.js';
 import { CONSECUTIVE_FAILURES_THRESHOLD, MAX_BACKOFF_MS } from './constants.js';
+import { coreLog } from './logger.js';
 
 /**
  * 指数退避(参考 AWS Full Jitter 算法)
@@ -101,10 +102,29 @@ export class Scheduler {
 
   /**
    * 立即触发一次(若已在跑则忽略)
+   *
+   * @param options.force true = 临时绕过 dryRunMode,真同步。
+   *   用于"用户主动要求立即同步"的入口(远程网页"立即同步"、
+   *   本地"保存并立即同步"按钮、弹窗"应用"按钮),保证即便
+   *   当前是弹窗询问模式也会真的拷贝/删除并落盘索引。
+   *   非 force 时则尊重当前 dryRunMode(只算 diff 不动盘)。
+   *
+   * 用 try/finally 还原 dryRunMode,即便 runOnce 抛错也不会污染下次调度。
    */
-  async runNow(): Promise<SyncResult | null> {
+  async runNow(options: { force?: boolean } = {}): Promise<SyncResult | null> {
     if (this.inFlight) return null;
-    return this.runOnce();
+    const prevDryRun = this.dryRunMode;
+    if (options.force && prevDryRun) {
+      this.dryRunMode = false;
+      coreLog.info('[scheduler] runNow force=true(临时关闭 dryRun)');
+    }
+    try {
+      return await this.runOnce();
+    } finally {
+      if (options.force && prevDryRun) {
+        this.dryRunMode = prevDryRun;
+      }
+    }
   }
 
   /**
