@@ -50,18 +50,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Windows x64 NSIS .exe
+          # Windows x64 NSIS .exe(只要顶层 *.exe,不要 win-unpacked/ 里的)
           - os: windows-latest
             label: windows-x64
             script: build:win
             artifact: auto-updater-windows-x64
-            artifact_glob: 'release/windows-x64/**/*.exe'
+            artifact_glob: 'release/windows-x64/*.exe'
           # macOS Apple Silicon (M1/M2/M3/M4)
+          # 只要顶层 dmg/zip,不要 mac-arm64/AppName.app/ 整个 bundle
           - os: macos-14
             label: macos-arm64
             script: build:mac:arm64
             artifact: auto-updater-macos-arm64
-            artifact_glob: 'release/macos-arm64/*'
+            artifact_glob: 'release/macos-arm64/*.{dmg,zip}'
           # macOS Intel x64 — 用 M1 runner (macos-14) 交叉编译
           # GitHub 的 macos-13 Intel runner pool 缩水、排队严重;借 Rosetta 出 x64 dmg 更快
           # electron-builder 在 arm64 host 上 build --x64 走 Rosetta,Apple 官方支持
@@ -69,8 +70,8 @@ jobs:
             label: macos-x64
             script: build:mac:x64
             artifact: auto-updater-macos-x64
-            artifact_glob: 'release/macos-x64/*'
-          # Linux x64 AppImage
+            artifact_glob: 'release/macos-x64/*.{dmg,zip}'
+          # Linux x64 AppImage(只要顶层 *.AppImage,不要 linux-unpacked/)
           - os: ubuntu-latest
             label: linux-x64
             script: build:linux
@@ -148,6 +149,14 @@ jobs:
           find . -mindepth 1 -type d -empty -delete
           echo "--- release assets ---"
           ls -la
+
+      # 同一 tag 重跑时(workflow 修了 bug 重新触发 CI),
+      # softprops/action-gh-release 不会清掉旧的 cruft 文件,只会追加。
+      # 先删除旧 Release,保证下一次 create 是干净的。
+      - name: Delete existing release for this tag (if any)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete "$GITHUB_REF_NAME" --yes || true
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
