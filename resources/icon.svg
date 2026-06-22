@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  自动更新检测 · 应用图标
+  含义: 蓝渐变底 + 白色刷新圆环(顺时针 270° + 三角箭头)
+  导出: 用 Inkscape 转 1024x1024 PNG,electron-builder 自动派生 .ico / .icns
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- 蓝渐变(顶亮底深)— 现代 App 图标常见配色 -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#1E40AF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角方形底(iOS 风格 rx=96 / 512) -->
+  <rect width="512" height="512" rx="96" ry="96" fill="url(#bg)"/>
+
+  <!--
+    刷新圆环:中心 (256,256),半径 140,描边宽 44
+    从 12 点 (256,116) 顺时针走 270° 到 9 点 (116,256)
+    large-arc-flag=1,sweep-flag=1(顺时针)
+  -->
+  <path d="M 256 116 A 140 140 0 1 1 116 256"
+        fill="none"
+        stroke="#FFFFFF"
+        stroke-width="44"
+        stroke-linecap="round"/>
+
+  <!--
+    箭头三角形 — 贴在 9 点钟末端 (116,256),尖端向上(顺时针运动方向)
+    底边水平,base 在 (80,256) 和 (152,256)
+    tip 在 (116,184)  ← 弧线方向的延伸
+  -->
+  <polygon points="80,256 152,256 116,184" fill="#FFFFFF"/>
+</svg>

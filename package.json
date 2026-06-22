@@ -54,11 +54,13 @@
   "build": {
     "appId": "com.local.auto-updater",
     "productName": "自动更新检测",
+    "icon": "resources/icon.png",
     "directories": {
       "output": "release"
     },
     "files": [
       "out/**/*",
+      "resources/**/*",
       "package.json"
     ],
     "win": {
@@ -70,6 +72,7 @@
           ]
         }
       ],
+      "icon": "resources/icon.png",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "mac": {

@@ -8,7 +8,7 @@
  * - 关闭按钮 = 最小化到托盘(不退出)
  */
 
-import { app, BrowserWindow, shell, type BrowserWindow as BrowserWindowType } from 'electron';
+import { app, BrowserWindow, nativeImage, shell, type BrowserWindow as BrowserWindowType } from 'electron';
 import { join } from 'node:path';
 import { APP_DISPLAY_NAME } from '@core/constants';
 import { mainLog } from '@core/logger';
@@ -24,7 +24,15 @@ export function getMainWindow(): BrowserWindowType | null {
   return mainWindow;
 }
 
+/** 应用图标(打包前用 resources/icon.png,打包后从 app 根目录取) */
+function loadAppIcon() {
+  // 开发模式:从源码 resources/ 取
+  const devPath = join(app.getAppPath(), 'resources', 'icon.png');
+  return nativeImage.createFromPath(devPath);
+}
+
 export function createWindow(): void {
+  const icon = loadAppIcon();
   mainWindow = new BrowserWindow({
     width: 760,
     height: 600,
@@ -34,6 +42,7 @@ export function createWindow(): void {
     // 不自动隐藏 — 顶部"关于"菜单用户得能直接看到
     autoHideMenuBar: false,
     title: APP_DISPLAY_NAME,
+    ...(icon.isEmpty() ? {} : { icon }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
