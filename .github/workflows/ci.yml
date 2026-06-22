@@ -62,8 +62,10 @@ jobs:
             script: build:mac:arm64
             artifact: auto-updater-macos-arm64
             artifact_glob: 'release/macos-arm64/*'
-          # macOS Intel
-          - os: macos-13
+          # macOS Intel x64 — 用 M1 runner (macos-14) 交叉编译
+          # GitHub 的 macos-13 Intel runner pool 缩水、排队严重;借 Rosetta 出 x64 dmg 更快
+          # electron-builder 在 arm64 host 上 build --x64 走 Rosetta,Apple 官方支持
+          - os: macos-14
             label: macos-x64
             script: build:mac:x64
             artifact: auto-updater-macos-x64
