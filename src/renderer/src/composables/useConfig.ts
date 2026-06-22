@@ -18,6 +18,7 @@ const emptyConfig = (): AppConfig => ({
   backupCount: 3,
   autostart: false,
   fileMappings: [],
+  ignoreDirs: [],
 });
 
 export function useConfig() {

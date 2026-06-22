@@ -117,6 +117,14 @@ export interface AppConfig {
   /** 文件映射规则 */
   fileMappings: FileMapping[];
   /**
+   * 同步时忽略的目录列表(相对 target 根)。
+   * - 这些目录里的文件不参与 diff、不拷贝、不删除、不被映射写入
+   * - 备份不受影响(rollback 仍能恢复被忽略的文件)
+   * - 例:["cache", "logs", "build/cache"] 表示忽略任意位置的 cache/ 目录 + logs/ + build/cache/
+   *   (匹配规则:relPath === entry 或 relPath.startsWith(entry + '/'),大小写敏感)
+   */
+  ignoreDirs: string[];
+  /**
    * 远程服务器(同 LAN 浏览器访问,只读 + 弹窗决策)
    * v0.1:仅暴露状态/历史/备份,允许远程确认弹窗;远程编辑 config 在 v0.2
    * 默认开启,密码随机生成 + bcrypt 存盘

@@ -35,6 +35,7 @@ describe('user-decision', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
+      ignoreDirs: [],
       backupDir: '',
     };
     scheduler = new Scheduler({ config, indexCachePath });

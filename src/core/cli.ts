@@ -35,6 +35,7 @@ interface CliArgs {
   target?: string;
   backupDir?: string;
   interval?: number;
+  ignoreDirs: string[];
   quiet: boolean;
 }
 
@@ -52,7 +53,7 @@ function userDataDir(): string {
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const out: CliArgs = { init: false, once: false, watch: false, quiet: false };
+  const out: CliArgs = { init: false, once: false, watch: false, ignoreDirs: [], quiet: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     switch (a) {
@@ -64,6 +65,7 @@ function parseArgs(argv: string[]): CliArgs {
       case '--source': out.source = argv[++i]; break;
       case '--target': out.target = argv[++i]; break;
       case '--backup-dir': out.backupDir = argv[++i]; break;
+      case '--ignore-dir': out.ignoreDirs.push(argv[++i]); break;
       case '--interval': {
         const v = Number(argv[++i]);
         if (Number.isNaN(v) || v < MIN_INTERVAL_SEC) {
@@ -87,8 +89,8 @@ function printHelp(): void {
   cliLog.info(`自动更新检测程序 - CLI
 
 用法:
-  npm run sync-once -- [--config <path>] [--source <dir>] [--target <dir>] [--backup-dir <dir>] [--quiet]
-  npm run watch     -- [--config <path>] [--source <dir>] [--target <dir>] [--backup-dir <dir>] [--interval <sec>] [--quiet]
+  npm run sync-once -- [--config <path>] [--source <dir>] [--target <dir>] [--backup-dir <dir>] [--ignore-dir <dir>]... [--quiet]
+  npm run watch     -- [--config <path>] [--source <dir>] [--target <dir>] [--backup-dir <dir>] [--ignore-dir <dir>]... [--interval <sec>] [--quiet]
   npm run init-config
 
 选项:
@@ -99,6 +101,7 @@ function printHelp(): void {
   --source <dir>          覆盖源目录
   --target <dir>          覆盖目标目录
   --backup-dir <dir>      覆盖备份目录(空 = 默认派生自 targetDir)
+  --ignore-dir <dir>      追加忽略目录(可多次,相对 target 根)
   --interval <sec>        覆盖检查间隔(秒, >= 60)
   --quiet                 减少日志
   -h, --help              显示帮助
@@ -222,6 +225,8 @@ function applyCliOverrides(cfg: AppConfig, args: CliArgs): AppConfig {
     targetDir: args.target ?? cfg.targetDir,
     backupDir: args.backupDir ?? cfg.backupDir,
     intervalSec: args.interval ?? cfg.intervalSec,
+    // CLI 传入的 ignore-dir 追加到 config 列表后面(不去重,让 syncer 内部 buildIgnorePrefixes 去重)
+    ignoreDirs: [...(cfg.ignoreDirs ?? []), ...args.ignoreDirs],
   };
 }
 

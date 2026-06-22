@@ -23,6 +23,7 @@ const DEFAULT_CONFIG: AppConfig = {
   autostart: false,
   applyMappingsImmediately: true,
   fileMappings: [],
+  ignoreDirs: [],
   remote: {
     enabled: true,           // 默认开启
     port: 9527,              // 默认端口
@@ -95,6 +96,9 @@ export class ConfigManager {
       fileMappings: Array.isArray(partial.fileMappings)
         ? partial.fileMappings.map((m) => ({ ...m }))
         : [...this.defaults.fileMappings],
+      ignoreDirs: Array.isArray(partial.ignoreDirs)
+        ? partial.ignoreDirs.filter((d): d is string => typeof d === 'string')
+        : [...this.defaults.ignoreDirs],
       remote: partial.remote
         ? { ...this.defaults.remote!, ...partial.remote }
         : { ...this.defaults.remote! },
@@ -109,6 +113,37 @@ export class ConfigManager {
     if (config.backupCount > MAX_BACKUP_COUNT) errors.push(`backupCount > ${MAX_BACKUP_COUNT}`);
     if (config.backupDir && config.backupDir === config.targetDir) {
       errors.push('backupDir 不能等于 targetDir(否则镜像同步会误删备份)');
+    }
+    // ignoreDirs 校验 — 拒绝空、`.`、含 `..`、绝对路径、重复
+    // (规范化在 syncer 里做,这里只校验合法性)
+    if (Array.isArray(config.ignoreDirs)) {
+      const seen = new Set<string>();
+      for (const raw of config.ignoreDirs) {
+        if (typeof raw !== 'string' || !raw.trim()) {
+          errors.push(`ignoreDirs 含有空字符串`);
+          continue;
+        }
+        const normalized = raw.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+        if (!normalized || normalized === '.') {
+          errors.push(`ignoreDirs 不允许 "." 或空路径: "${raw}"`);
+          continue;
+        }
+        if (normalized.includes('..')) {
+          errors.push(`ignoreDirs 不允许包含 "..": "${raw}"`);
+          continue;
+        }
+        if (normalized.includes(':')) {
+          errors.push(`ignoreDirs 不允许绝对路径(包含 ":"): "${raw}"`);
+          continue;
+        }
+        if (seen.has(normalized)) {
+          errors.push(`ignoreDirs 重复条目: "${raw}"`);
+          continue;
+        }
+        seen.add(normalized);
+      }
+    } else {
+      errors.push('ignoreDirs 必须是数组');
     }
     if (errors.length) {
       throw new Error(`配置校验失败: ${errors.join(', ')}`);

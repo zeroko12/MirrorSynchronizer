@@ -14,7 +14,7 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { Syncer } from '../src/core/syncer.js';
 import { DEFAULT_CONFIG } from '../src/core/config.js';
-import { makeTempDir, rmTemp, readTree, writeTree, writeFile, TreeFile } from './helpers.js';
+import { makeTempDir, rmTemp, readTree, writeTree, writeFile, wait, TreeFile } from './helpers.js';
 import type { AppConfig } from '../src/core/types.js';
 
 function makeConfig(sourceDir: string, targetDir: string, overrides: Partial<AppConfig> = {}): AppConfig {
@@ -162,6 +162,7 @@ describe('Syncer - 文件映射规则', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
+      ignoreDirs: [],
       backupDir: '',
     };
   });
@@ -419,6 +420,223 @@ describe('Syncer - 文件映射规则', () => {
   });
 });
 
+describe('Syncer - ignoreDirs', () => {
+  let sourceDir: string;
+  let targetDir: string;
+  let localDir: string;
+  let config: AppConfig;
+
+  beforeEach(async () => {
+    sourceDir = await makeTempDir('ig-src-');
+    targetDir = await makeTempDir('ig-tgt-');
+    localDir = await makeTempDir('ig-local-');
+    config = {
+      sourceDir,
+      targetDir,
+      intervalSec: 60,
+      backupCount: 3,
+      autostart: false,
+      fileMappings: [],
+      ignoreDirs: [],
+      backupDir: '',
+    };
+  });
+
+  afterEach(async () => {
+    await rmTemp(sourceDir);
+    await rmTemp(targetDir);
+    await rmTemp(localDir);
+  });
+
+  it('ignoreDirs=[] 时行为不变(回归)', async () => {
+    await writeTree(sourceDir, [
+      { relPath: 'a.txt', content: 'a' },
+      { relPath: 'cache/x.txt', content: 'x' },
+    ]);
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+    expect(result.added.sort()).toEqual(['a.txt', 'cache/x.txt']);
+    expect(result.deleted).toEqual([]);
+  });
+
+  it('ignoreDirs=[cache] — 源/目标都有 cache/x.txt,不变(其他文件正常 sync)', async () => {
+    await writeTree(sourceDir, [
+      { relPath: 'a.txt', content: 'a' },
+      { relPath: 'cache/x.txt', content: 'x' },
+    ]);
+    await wait(20);
+    await writeTree(targetDir, [
+      { relPath: 'a.txt', content: 'OLD-a' },        // sizes 不同 → 会同步
+      { relPath: 'cache/x.txt', content: 'OLD-cache' }, // 忽略
+    ]);
+    config.ignoreDirs = ['cache'];
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    // cache 内容不参与 diff
+    expect(result.added).not.toContain('cache/x.txt');
+    expect(result.modified).not.toContain('cache/x.txt');
+    expect(result.deleted).not.toContain('cache/x.txt');
+    // a.txt 正常同步(首次 sync,lastIndexMap 为空 → isNew=true → 进 added)
+    expect(result.added).toContain('a.txt');
+    expect(result.modified).toEqual([]);
+    // target/a.txt 被覆盖
+    expect((await readTree(targetDir)).get('a.txt')).toBe('a');
+    // target/cache/x.txt 不动
+    expect((await readTree(targetDir)).get('cache/x.txt')).toBe('OLD-cache');
+  });
+
+  it('ignoreDirs=[cache] — 源有 cache/x.txt 但目标没有,不进 added', async () => {
+    await writeTree(sourceDir, [{ relPath: 'cache/new.txt', content: 'n' }]);
+    config.ignoreDirs = ['cache'];
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    expect(result.added).toEqual([]);
+    expect(result.modified).toEqual([]);
+    expect(result.deleted).toEqual([]);
+    expect((await readTree(targetDir)).has('cache/new.txt')).toBe(false);
+  });
+
+  it('ignoreDirs=[cache] — 源没有但目标有 cache/x.txt,镜像不删', async () => {
+    await writeTree(sourceDir, [{ relPath: 'a.txt', content: 'a' }]);
+    await writeTree(targetDir, [
+      { relPath: 'a.txt', content: 'a' },
+      { relPath: 'cache/old.txt', content: 'OLD' },
+    ]);
+    config.ignoreDirs = ['cache'];
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    expect(result.deleted).not.toContain('cache/old.txt');
+    expect(result.deleted).toEqual([]);
+    expect((await readTree(targetDir)).has('cache/old.txt')).toBe(true);
+  });
+
+  it('ignoreDirs=[cache] — 子目录 cache/sub/ 自动包含', async () => {
+    await writeTree(sourceDir, [
+      { relPath: 'cache/sub/deep.txt', content: 'd' },
+      { relPath: 'cache/top.txt', content: 't' },
+    ]);
+    await writeTree(targetDir, [
+      { relPath: 'cache/sub/deep.txt', content: 'OLD' },
+    ]);
+    config.ignoreDirs = ['cache'];
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    expect(result.added).toEqual([]);
+    expect(result.modified).toEqual([]);
+    expect(result.deleted).toEqual([]);
+    expect((await readTree(targetDir)).get('cache/sub/deep.txt')).toBe('OLD');
+  });
+
+  it('嵌套 ignoreDirs=[build/cache] — 只忽略 build/cache/,不影响 build/src/', async () => {
+    await writeTree(sourceDir, [
+      { relPath: 'build/cache/x.txt', content: 'x' },     // 忽略
+      { relPath: 'build/src/main.ts', content: 'm' },     // 同步
+    ]);
+    await wait(20);
+    await writeTree(targetDir, [
+      { relPath: 'build/cache/x.txt', content: 'OLD-cache' },  // 忽略
+      { relPath: 'build/src/main.ts', content: 'OLD-main' },   // sizes 不同,会同步
+    ]);
+    config.ignoreDirs = ['build/cache'];
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    // 首次 sync(lastIndexMap=null)→ 全部 isNew,进 added
+    expect(result.modified).toEqual([]);
+    expect(result.deleted).toEqual([]);
+    expect(result.added).toEqual(['build/src/main.ts']);
+    expect(result.added).not.toContain('build/cache/x.txt');
+    // target/build/cache/x.txt 不动
+    expect((await readTree(targetDir)).get('build/cache/x.txt')).toBe('OLD-cache');
+    // target/build/src/main.ts 被覆盖
+    expect((await readTree(targetDir)).get('build/src/main.ts')).toBe('m');
+  });
+
+  it('映射规则 targetRelpath 在 ignoreDir 内 → mappingSkipped', async () => {
+    await writeFile(join(localDir, 'local.ini'), '[main]');
+    await writeTree(sourceDir, [{ relPath: 'a.txt', content: 'a' }]);
+    config.ignoreDirs = ['config'];
+    config.fileMappings = [
+      {
+        id: '1',
+        name: 'local-config',
+        sourcePath: join(localDir, 'local.ini'),
+        targetRelpath: 'config/local.ini',
+        enabled: true,
+        overwrite: true,
+        ifSourceMissing: 'skip',
+      },
+    ];
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    expect(result.mappingCopied).toEqual([]);
+    expect(result.mappingSkipped).toContain('local-config');
+    expect((await readTree(targetDir)).has('config/local.ini')).toBe(false);
+  });
+});
+
+describe('Syncer - ignoreDirs 工具函数', () => {
+  it('buildIgnorePrefixes 规范化:["cache/"]、["cache"]、["\\cache\\"] 视为同一条', async () => {
+    const { buildIgnorePrefixes } = await import('../src/core/syncer.js');
+    expect(buildIgnorePrefixes(['cache/'])).toEqual(['cache']);
+    expect(buildIgnorePrefixes(['cache'])).toEqual(['cache']);
+    expect(buildIgnorePrefixes(['\\cache\\'])).toEqual(['cache']);
+  });
+
+  it('buildIgnorePrefixes 去重:["cache","cache/","cache"] → 单条', async () => {
+    const { buildIgnorePrefixes } = await import('../src/core/syncer.js');
+    expect(buildIgnorePrefixes(['cache', 'cache/', 'cache'])).toEqual(['cache']);
+  });
+
+  it('buildIgnorePrefixes 拒绝非法条目', async () => {
+    const { buildIgnorePrefixes } = await import('../src/core/syncer.js');
+    expect(buildIgnorePrefixes([])).toEqual([]);
+    expect(buildIgnorePrefixes(undefined)).toEqual([]);
+    expect(buildIgnorePrefixes(['', '.', '..', 'a/../b'])).toEqual([]);
+    expect(buildIgnorePrefixes(['C:\\abs', 'D:/abs'])).toEqual([]); // 含 :
+    // /abs 和 \abs 规范化后等价 → 去重,只剩一条
+    expect(buildIgnorePrefixes(['/abs', '\\abs'])).toEqual(['abs']);
+  });
+
+  it('isInIgnoredDir 匹配规则', async () => {
+    const { isInIgnoredDir } = await import('../src/core/syncer.js');
+    const prefixes = ['cache'];
+    expect(isInIgnoredDir('cache', prefixes)).toBe(true);          // 自身
+    expect(isInIgnoredDir('cache/x', prefixes)).toBe(true);        // 直接子
+    expect(isInIgnoredDir('cache/sub/y', prefixes)).toBe(true);    // 嵌套子
+    expect(isInIgnoredDir('cachefile.txt', prefixes)).toBe(false); // 名字相近但不含 /
+    expect(isInIgnoredDir('src/cache/x', prefixes)).toBe(true);    // 任意位置
+    expect(isInIgnoredDir('src/a.txt', prefixes)).toBe(false);
+    expect(isInIgnoredDir('', prefixes)).toBe(false);
+    expect(isInIgnoredDir('cache', [])).toBe(false);              // 空 prefix = 不过滤
+  });
+});
+
+describe('ConfigManager - ignoreDirs 校验', () => {
+  it('拒绝空字符串、".", "..", 绝对路径、重复', async () => {
+    const { ConfigManager } = await import('../src/core/config.js');
+    const tmpCfg = await makeTempDir('cfg-test-');
+    const cfgPath = join(tmpCfg, 'config.json');
+    const mgr = new ConfigManager({ configPath: cfgPath, defaults: { ...DEFAULT_CONFIG, ignoreDirs: [] } });
+    try {
+      await expect(mgr.save({ ...DEFAULT_CONFIG, ignoreDirs: ['cache', ''] as never })).rejects.toThrow(/ignoreDirs/);
+      await expect(mgr.save({ ...DEFAULT_CONFIG, ignoreDirs: ['.', 'cache'] } as never)).rejects.toThrow(/ignoreDirs/);
+      await expect(mgr.save({ ...DEFAULT_CONFIG, ignoreDirs: ['../escape', 'cache'] } as never)).rejects.toThrow(/ignoreDirs/);
+      await expect(mgr.save({ ...DEFAULT_CONFIG, ignoreDirs: ['C:\\abs', 'cache'] } as never)).rejects.toThrow(/ignoreDirs/);
+      await expect(mgr.save({ ...DEFAULT_CONFIG, ignoreDirs: ['cache', 'cache'] } as never)).rejects.toThrow(/ignoreDirs/);
+      // 合法值应通过
+      await expect(mgr.save({ ...DEFAULT_CONFIG, ignoreDirs: ['cache', 'build/cache'] })).resolves.toBeUndefined();
+    } finally {
+      await rmTemp(tmpCfg);
+    }
+  });
+});
+
 describe('Syncer - 边界与错误', () => {
   let sourceDir: string;
   let targetDir: string;
@@ -441,6 +659,7 @@ describe('Syncer - 边界与错误', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
+      ignoreDirs: [],
       backupDir: '',
     };
     const syncer = new Syncer(config);
@@ -487,6 +706,7 @@ describe('Syncer - 边界与错误', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
+      ignoreDirs: [],
       backupDir: '',
     };
     const syncer = new Syncer(config);
@@ -506,6 +726,7 @@ describe('Syncer - 边界与错误', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
+      ignoreDirs: [],
       backupDir: '',
     };
     const syncer = new Syncer(config);
@@ -535,6 +756,7 @@ describe('Syncer - 性能', () => {
         backupCount: 3,
         autostart: false,
         fileMappings: [],
+      ignoreDirs: [],
         backupDir: '',
       };
       const syncer = new Syncer(config);

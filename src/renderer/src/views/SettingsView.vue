@@ -51,6 +51,40 @@ const popupEnabled = ref(true);
 const autostartEnabled = ref(false);
 const autostartLoading = ref(false);
 
+/** 忽略目录(从 config.ignoreDirs 同步)— 编辑时直接改 config.value,保存走 useConfig.save */
+const newIgnoreDir = ref('');
+
+/**
+ * 校验 ignoreDir 条目合法性(跟后端 ConfigManager.validate 一致)
+ * 返回 null = 合法,返回 string = 错误信息
+ */
+function validateIgnoreDir(raw: string, existing: readonly string[]): string | null {
+  if (!raw || !raw.trim()) return '不能为空';
+  const normalized = raw.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  if (!normalized || normalized === '.') return '不能为 "." 或空';
+  if (normalized.includes('..')) return '不能包含 ".."';
+  if (normalized.includes(':')) return '不能是绝对路径(不能含 ":")';
+  if (existing.includes(normalized)) return '已存在';
+  return null;
+}
+
+function addIgnoreDir() {
+  const err = validateIgnoreDir(newIgnoreDir.value, config.value?.ignoreDirs ?? []);
+  if (err) {
+    message.error(`忽略目录非法: ${err}`);
+    return;
+  }
+  const normalized = newIgnoreDir.value.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  const next = [...(config.value?.ignoreDirs ?? []), normalized];
+  config.value = { ...config.value, ignoreDirs: next };
+  newIgnoreDir.value = '';
+}
+
+function removeIgnoreDir(idx: number) {
+  const next = (config.value?.ignoreDirs ?? []).filter((_, i) => i !== idx);
+  config.value = { ...config.value, ignoreDirs: next };
+}
+
 const formReady = computed(() => !loading.value);
 const canSave = computed(() => {
   if (saving.value) return false;
@@ -608,6 +642,47 @@ function formatTime(ts: number | null): string {
                 style="width: 460px"
               />
               <n-button @click="pickFolder('backupDir')">浏览…</n-button>
+            </n-space>
+          </n-form-item>
+
+          <n-form-item label="忽略目录(同步时跳过这些目录)">
+            <n-space vertical style="width: 100%">
+              <!-- 已添加的列表 -->
+              <n-space v-if="(config.ignoreDirs ?? []).length > 0" :wrap="true" size="small">
+                <n-tag
+                  v-for="(dir, idx) in config.ignoreDirs"
+                  :key="dir"
+                  type="default"
+                  size="small"
+                  closable
+                  @close="removeIgnoreDir(idx)"
+                  style="font-family: monospace; cursor: default"
+                >
+                  {{ dir }}
+                </n-tag>
+              </n-space>
+              <n-text v-else depth="3" style="font-size: 12px">
+                (无 — 所有目录都会参与同步)
+              </n-text>
+
+              <!-- 添加 -->
+              <n-space>
+                <n-input
+                  v-model:value="newIgnoreDir"
+                  placeholder="例如 cache 或 logs/2025"
+                  style="width: 300px"
+                  @keydown.enter="addIgnoreDir"
+                />
+                <n-button :disabled="!newIgnoreDir.trim()" @click="addIgnoreDir">
+                  添加
+                </n-button>
+              </n-space>
+
+              <n-text depth="3" style="font-size: 12px; line-height: 1.6">
+                路径相对目标根。支持嵌套(如 <code>build/cache</code>)。
+                这些目录里的文件<b>不参与 diff</b>、不拷贝、不删除、映射规则也不会写入。
+                备份仍包含这些内容,rollback 时可以恢复。
+              </n-text>
             </n-space>
           </n-form-item>
 

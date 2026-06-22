@@ -84,6 +84,7 @@ describe('Syncer - HTTP source 端到端', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
+      ignoreDirs: [],
       backupDir: '',
     };
     const syncer = new Syncer(config);
@@ -109,6 +110,7 @@ describe('Syncer - HTTP source 端到端', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
+      ignoreDirs: [],
       backupDir: '',
     };
     const syncer = new Syncer(config);
@@ -129,6 +131,7 @@ describe('Syncer - HTTP source 端到端', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
+      ignoreDirs: [],
       backupDir: '',
     };
     const syncer = new Syncer(config);
@@ -148,6 +151,7 @@ describe('Syncer - HTTP source 端到端', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
+      ignoreDirs: [],
       backupDir: '',
     };
     const syncer = new Syncer(config);
@@ -172,6 +176,7 @@ describe('Syncer - HTTP source 端到端', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
+      ignoreDirs: [],
       backupDir: '',
     };
     const syncer = new Syncer(config);
