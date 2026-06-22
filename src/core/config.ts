@@ -23,7 +23,7 @@ const DEFAULT_CONFIG: AppConfig = {
   autostart: false,
   applyMappingsImmediately: true,
   fileMappings: [],
-  ignoreDirs: [],
+  ignoreItems: [],
   remote: {
     enabled: true,           // 默认开启
     port: 9527,              // 默认端口
@@ -96,9 +96,9 @@ export class ConfigManager {
       fileMappings: Array.isArray(partial.fileMappings)
         ? partial.fileMappings.map((m) => ({ ...m }))
         : [...this.defaults.fileMappings],
-      ignoreDirs: Array.isArray(partial.ignoreDirs)
-        ? partial.ignoreDirs.filter((d): d is string => typeof d === 'string')
-        : [...this.defaults.ignoreDirs],
+      ignoreItems: Array.isArray(partial.ignoreItems)
+        ? partial.ignoreItems.filter((d): d is string => typeof d === 'string')
+        : [...this.defaults.ignoreItems],
       remote: partial.remote
         ? { ...this.defaults.remote!, ...partial.remote }
         : { ...this.defaults.remote! },
@@ -114,36 +114,36 @@ export class ConfigManager {
     if (config.backupDir && config.backupDir === config.targetDir) {
       errors.push('backupDir 不能等于 targetDir(否则镜像同步会误删备份)');
     }
-    // ignoreDirs 校验 — 拒绝空、`.`、含 `..`、绝对路径、重复
+    // ignoreItems 校验 — 拒绝空、`.`、含 `..`、绝对路径、重复
     // (规范化在 syncer 里做,这里只校验合法性)
-    if (Array.isArray(config.ignoreDirs)) {
+    if (Array.isArray(config.ignoreItems)) {
       const seen = new Set<string>();
-      for (const raw of config.ignoreDirs) {
+      for (const raw of config.ignoreItems) {
         if (typeof raw !== 'string' || !raw.trim()) {
-          errors.push(`ignoreDirs 含有空字符串`);
+          errors.push(`ignoreItems 含有空字符串`);
           continue;
         }
         const normalized = raw.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
         if (!normalized || normalized === '.') {
-          errors.push(`ignoreDirs 不允许 "." 或空路径: "${raw}"`);
+          errors.push(`ignoreItems 不允许 "." 或空路径: "${raw}"`);
           continue;
         }
         if (normalized.includes('..')) {
-          errors.push(`ignoreDirs 不允许包含 "..": "${raw}"`);
+          errors.push(`ignoreItems 不允许包含 "..": "${raw}"`);
           continue;
         }
         if (normalized.includes(':')) {
-          errors.push(`ignoreDirs 不允许绝对路径(包含 ":"): "${raw}"`);
+          errors.push(`ignoreItems 不允许绝对路径(包含 ":"): "${raw}"`);
           continue;
         }
         if (seen.has(normalized)) {
-          errors.push(`ignoreDirs 重复条目: "${raw}"`);
+          errors.push(`ignoreItems 重复条目: "${raw}"`);
           continue;
         }
         seen.add(normalized);
       }
     } else {
-      errors.push('ignoreDirs 必须是数组');
+      errors.push('ignoreItems 必须是数组');
     }
     if (errors.length) {
       throw new Error(`配置校验失败: ${errors.join(', ')}`);

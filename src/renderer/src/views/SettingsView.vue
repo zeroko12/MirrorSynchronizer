@@ -51,14 +51,14 @@ const popupEnabled = ref(true);
 const autostartEnabled = ref(false);
 const autostartLoading = ref(false);
 
-/** 忽略目录(从 config.ignoreDirs 同步)— 编辑时直接改 config.value,保存走 useConfig.save */
-const newIgnoreDir = ref('');
+/** 忽略项(从 config.ignoreItems 同步)— 编辑时直接改 config.value,保存走 useConfig.save */
+const newIgnoreItem = ref('');
 
 /**
- * 校验 ignoreDir 条目合法性(跟后端 ConfigManager.validate 一致)
+ * 校验 ignoreItem 条目合法性(跟后端 ConfigManager.validate 一致)
  * 返回 null = 合法,返回 string = 错误信息
  */
-function validateIgnoreDir(raw: string, existing: readonly string[]): string | null {
+function validateIgnoreItem(raw: string, existing: readonly string[]): string | null {
   if (!raw || !raw.trim()) return '不能为空';
   const normalized = raw.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
   if (!normalized || normalized === '.') return '不能为 "." 或空';
@@ -68,21 +68,67 @@ function validateIgnoreDir(raw: string, existing: readonly string[]): string | n
   return null;
 }
 
-function addIgnoreDir() {
-  const err = validateIgnoreDir(newIgnoreDir.value, config.value?.ignoreDirs ?? []);
+function addIgnoreItemFromInput() {
+  const err = validateIgnoreItem(newIgnoreItem.value, config.value?.ignoreItems ?? []);
   if (err) {
-    message.error(`忽略目录非法: ${err}`);
+    message.error(`忽略项非法: ${err}`);
     return;
   }
-  const normalized = newIgnoreDir.value.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
-  const next = [...(config.value?.ignoreDirs ?? []), normalized];
-  config.value = { ...config.value, ignoreDirs: next };
-  newIgnoreDir.value = '';
+  const normalized = newIgnoreItem.value.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  const next = [...(config.value?.ignoreItems ?? []), normalized];
+  config.value = { ...config.value, ignoreItems: next };
+  newIgnoreItem.value = '';
 }
 
-function removeIgnoreDir(idx: number) {
-  const next = (config.value?.ignoreDirs ?? []).filter((_, i) => i !== idx);
-  config.value = { ...config.value, ignoreDirs: next };
+function removeIgnoreItem(idx: number) {
+  const next = (config.value?.ignoreItems ?? []).filter((_, i) => i !== idx);
+  config.value = { ...config.value, ignoreItems: next };
+}
+
+/**
+ * 把对话返回的绝对路径转成相对 targetDir 的路径。
+ * - Windows 路径分隔符统一为 `/`
+ * - 大小写不敏感比较(Windows / macOS HFS+ 默认)
+ * - 不在 targetDir 内 → 返回 null(UI 报错)
+ */
+function absToRelPath(absPath: string, baseDir: string): string | null {
+  const norm = (p: string) => p.replace(/[\\/]+/g, '/').replace(/\/+$/, '');
+  const a = norm(absPath);
+  const b = norm(baseDir);
+  if (!a || !b) return null;
+  const aL = a.toLowerCase();
+  const bL = b.toLowerCase();
+  if (aL === bL) return ''; // 选了 targetDir 自身
+  if (!aL.startsWith(bL + '/')) return null; // 不在 targetDir 内
+  return a.substring(b.length + 1);
+}
+
+/** 打开 file/folder 选择对话框,选完自动加入 ignoreItems */
+async function pickIgnoreItem(mode: 'file' | 'folder' | 'both') {
+  if (!config.value?.targetDir) {
+    message.warning('请先填写目标目录');
+    return;
+  }
+  const result = await getApi().selectPath({
+    defaultPath: config.value.targetDir,
+    mode,
+  });
+  if (result.canceled || !result.path) return;
+  const rel = absToRelPath(result.path, config.value.targetDir);
+  if (rel === null) {
+    message.error(`所选路径必须在目标目录内:\n${result.path}`);
+    return;
+  }
+  if (rel === '') {
+    message.warning('选了目标目录自身,无意义');
+    return;
+  }
+  const existing = config.value?.ignoreItems ?? [];
+  if (existing.includes(rel)) {
+    message.warning(`已存在: ${rel}`);
+    return;
+  }
+  config.value = { ...config.value, ignoreItems: [...existing, rel] };
 }
 
 const formReady = computed(() => !loading.value);
@@ -645,43 +691,56 @@ function formatTime(ts: number | null): string {
             </n-space>
           </n-form-item>
 
-          <n-form-item label="忽略目录(同步时跳过这些目录)">
+          <n-form-item label="忽略项(同步时跳过这些文件或目录)">
             <n-space vertical style="width: 100%">
               <!-- 已添加的列表 -->
-              <n-space v-if="(config.ignoreDirs ?? []).length > 0" :wrap="true" size="small">
+              <n-space v-if="(config.ignoreItems ?? []).length > 0" :wrap="true" size="small">
                 <n-tag
-                  v-for="(dir, idx) in config.ignoreDirs"
-                  :key="dir"
+                  v-for="(item, idx) in config.ignoreItems"
+                  :key="item"
                   type="default"
                   size="small"
                   closable
-                  @close="removeIgnoreDir(idx)"
+                  @close="removeIgnoreItem(idx)"
                   style="font-family: monospace; cursor: default"
                 >
-                  {{ dir }}
+                  {{ item }}
                 </n-tag>
               </n-space>
               <n-text v-else depth="3" style="font-size: 12px">
-                (无 — 所有目录都会参与同步)
+                (无 — 所有文件都会参与同步)
               </n-text>
 
-              <!-- 添加 -->
-              <n-space>
+              <!-- 添加:文本输入 + 浏览按钮(支持文件/目录) -->
+              <n-space :wrap="true">
                 <n-input
-                  v-model:value="newIgnoreDir"
-                  placeholder="例如 cache 或 logs/2025"
-                  style="width: 300px"
-                  @keydown.enter="addIgnoreDir"
+                  v-model:value="newIgnoreItem"
+                  placeholder="相对目标根的路径,例如 cache 或 config/local.ini"
+                  style="width: 320px"
+                  @keydown.enter="addIgnoreItemFromInput"
                 />
-                <n-button :disabled="!newIgnoreDir.trim()" @click="addIgnoreDir">
+                <n-button :disabled="!newIgnoreItem.trim()" @click="addIgnoreItemFromInput">
                   添加
+                </n-button>
+                <n-divider vertical />
+                <n-button :disabled="!config.targetDir" @click="pickIgnoreItem('folder')">
+                  选目录…
+                </n-button>
+                <n-button :disabled="!config.targetDir" @click="pickIgnoreItem('file')">
+                  选文件…
                 </n-button>
               </n-space>
 
-              <n-text depth="3" style="font-size: 12px; line-height: 1.6">
-                路径相对目标根。支持嵌套(如 <code>build/cache</code>)。
-                这些目录里的文件<b>不参与 diff</b>、不拷贝、不删除、映射规则也不会写入。
-                备份仍包含这些内容,rollback 时可以恢复。
+              <n-text depth="3" style="font-size: 12px; line-height: 1.7">
+                <div>
+                  路径相对目标根。<b>目录项</b>(如 <code>cache</code>、<code>build/cache</code>)会忽略整个子树(任意深度);<b>文件项</b>(如 <code>config/local.ini</code>)只忽略这一个文件。
+                </div>
+                <div>
+                  选目录/选文件按钮以目标目录为根打开选择器,自动算出相对路径。
+                </div>
+                <div>
+                  这些项不参与 diff、不拷贝、不删除、映射规则也不会写入。备份仍包含,rollback 时可恢复。
+                </div>
               </n-text>
             </n-space>
           </n-form-item>

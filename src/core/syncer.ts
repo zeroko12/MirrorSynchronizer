@@ -56,17 +56,17 @@ function ensureRel(rel: string): string {
 }
 
 /**
- * 把 ignoreDirs 规范化为前缀匹配数组。
+ * 把 ignoreItems 规范化为匹配数组。
  * - 统一用正斜杠、去头尾空白/斜杠
  * - 拒绝空、`.`、`..`、含 `:`(避免绝对路径)
  * - 去重(规范化后等价视为同一条)
  * 返回空数组 = 不忽略任何东西。
  */
-export function buildIgnorePrefixes(ignoreDirs: string[] | undefined): string[] {
-  if (!ignoreDirs || ignoreDirs.length === 0) return [];
+export function buildIgnoreItems(ignoreItems: string[] | undefined): string[] {
+  if (!ignoreItems || ignoreItems.length === 0) return [];
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const raw of ignoreDirs) {
+  for (const raw of ignoreItems) {
     if (typeof raw !== 'string') continue;
     const normalized = raw.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
     if (!normalized || normalized === '.' || normalized.includes('..') || normalized.includes(':')) {
@@ -80,27 +80,19 @@ export function buildIgnorePrefixes(ignoreDirs: string[] | undefined): string[] 
 }
 
 /**
- * 判断 relPath 是否在 ignorePrefixes 任何一条前缀下。
+ * 判断 relPath 是否被 ignoreItems 任何一项命中。
  *
- * 语义:目录名匹配,可出现在路径的任意位置。
- * - `cache` 匹配 `cache/x`、`a/cache/x`、`a/b/cache/x`(任意深度的 cache 目录)
- * - `build/cache` 匹配 `build/cache/x`(必须是 build 下的 cache,不是任意 cache)
+ * 匹配规则(prefix):
+ * - relPath === item                → 精确匹配(单文件 / 精确路径)
+ * - relPath.startsWith(item + '/')  → 在 item 目录下(目录项,任意深度)
  *
- * 实现:沿 relPath 的每个 `/` 边界切分,检查子串是否落在 ignoreDir 内。
- * (子目录自动包含,大小写敏感 — 与 indexer 一致)
+ * 不会"跨位置"匹配:`cache` 只匹配 `cache/...`,不会匹配 `subdir/cache/...`
+ * 也不会前缀相似匹配:`cache` 不会匹配 `cachefile.txt`(`cache` + `/` 检查不通过)
  */
-export function isInIgnoredDir(relPath: string, prefixes: readonly string[]): boolean {
-  if (prefixes.length === 0) return false;
-  for (const p of prefixes) {
-    // 从每个 '/' 边界切分 relPath,检查剩余子串是否匹配
-    let from = 0;
-    while (from <= relPath.length) {
-      const sub = relPath.substring(from);
-      if (sub === p || sub.startsWith(p + '/')) return true;
-      const next = relPath.indexOf('/', from);
-      if (next < 0) break;
-      from = next + 1;
-    }
+export function isInIgnoredItem(relPath: string, items: readonly string[]): boolean {
+  if (items.length === 0) return false;
+  for (const item of items) {
+    if (relPath === item || relPath.startsWith(item + '/')) return true;
   }
   return false;
 }
@@ -245,8 +237,8 @@ export class Syncer {
       return { result, newSourceIndex: [] };
     }
 
-    // 0. 规范化 ignoreDirs(空数组 = 不过滤任何东西)
-    const ignorePrefixes = buildIgnorePrefixes(this.config.ignoreDirs);
+    // 0. 规范化 ignoreItems(空数组 = 不过滤任何东西)
+    const ignoreItems = buildIgnoreItems(this.config.ignoreItems);
 
     // 1. 扫描源(通过 SourceAdapter — 自动选 FsAdapter 或 HttpAdapter)
     const adapter = pickAdapter(sourceDir);
@@ -264,10 +256,10 @@ export class Syncer {
       await adapter.close().catch(() => undefined);
       return { result, newSourceIndex: [] };
     }
-    // 过滤 ignoreDirs(在扫描结果上做 — 不污染 lastIndexMap,因为 lastIndex
+    // 过滤 ignoreItems(在扫描结果上做 — 不污染 lastIndexMap,因为 lastIndex
     // 里的 ignore 条目在下次同步时被同样的 prefix 过滤掉,语义一致)
-    const sourceFiles = ignorePrefixes.length
-      ? sourceFilesAll.filter((f) => !isInIgnoredDir(f.relPath, ignorePrefixes))
+    const sourceFiles = ignoreItems.length
+      ? sourceFilesAll.filter((f) => !isInIgnoredItem(f.relPath, ignoreItems))
       : sourceFilesAll;
 
     // 2. 扫描目标(始终是本地)
@@ -292,9 +284,9 @@ export class Syncer {
       }
     }
     result.warnings.push(...targetScan.warnings);
-    // 过滤 ignoreDirs
-    const targetFiles = ignorePrefixes.length
-      ? targetScan.files.filter((f) => !isInIgnoredDir(f.relPath, ignorePrefixes))
+    // 过滤 ignoreItems
+    const targetFiles = ignoreItems.length
+      ? targetScan.files.filter((f) => !isInIgnoredItem(f.relPath, ignoreItems))
       : targetScan.files;
 
     // 3. 构建 map
@@ -319,8 +311,8 @@ export class Syncer {
       if (resolved) mappedTargetPaths.add(resolved);
     }
 
-    // 3.5b 镜像删除豁免集 = 映射目标 ∪ ignoreDirs(忽略目录里的"孤儿"也不该被镜像删)
-    const exemptFromMirrorDelete = new Set<string>([...mappedTargetPaths, ...ignorePrefixes]);
+    // 3.5b 镜像删除豁免集 = 映射目标 ∪ ignoreItems(忽略目录里的"孤儿"也不该被镜像删)
+    const exemptFromMirrorDelete = new Set<string>([...mappedTargetPaths, ...ignoreItems]);
 
     // 3.6 先预算本次会改/删/加哪些文件(不实际执行)
     //    有任一变化就建备份(只为了"无变化"场景省空间)
@@ -410,7 +402,7 @@ export class Syncer {
       }
     }
 
-    // 5. DELETE (镜像模式,但映射目标路径 + ignoreDirs 豁免)
+    // 5. DELETE (镜像模式,但映射目标路径 + ignoreItems 豁免)
     for (const [rel] of targetMap) {
       if (sourceMap.has(rel)) continue; // 源里有,肯定不删
       if (exemptFromMirrorDelete.has(normalize(rel))) continue; // 映射目标 / 忽略目录,豁免
@@ -512,9 +504,9 @@ export class Syncer {
       return;
     }
 
-    // 0. 目标在 ignoreDirs 里 → 整体跳过(不拷贝、不计 mappingCopied / skippedExisting)
-    const ignorePrefixes = buildIgnorePrefixes(this.config.ignoreDirs);
-    if (isInIgnoredDir(relPath, ignorePrefixes)) {
+    // 0. 目标在 ignoreItems 里 → 整体跳过(不拷贝、不计 mappingCopied / skippedExisting)
+    const ignoreItems = buildIgnoreItems(this.config.ignoreItems);
+    if (isInIgnoredItem(relPath, ignoreItems)) {
       coreLog.info(`[mapping] ${mapping.name}: 目标在忽略目录 ${relPath} → skip`);
       result.mappingSkipped.push(mapping.name);
       return;

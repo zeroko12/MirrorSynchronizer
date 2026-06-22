@@ -35,7 +35,7 @@ interface CliArgs {
   target?: string;
   backupDir?: string;
   interval?: number;
-  ignoreDirs: string[];
+  ignoreItems: string[];
   quiet: boolean;
 }
 
@@ -53,7 +53,7 @@ function userDataDir(): string {
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const out: CliArgs = { init: false, once: false, watch: false, ignoreDirs: [], quiet: false };
+  const out: CliArgs = { init: false, once: false, watch: false, ignoreItems: [], quiet: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     switch (a) {
@@ -65,7 +65,7 @@ function parseArgs(argv: string[]): CliArgs {
       case '--source': out.source = argv[++i]; break;
       case '--target': out.target = argv[++i]; break;
       case '--backup-dir': out.backupDir = argv[++i]; break;
-      case '--ignore-dir': out.ignoreDirs.push(argv[++i]); break;
+      case '--ignore-dir': out.ignoreItems.push(argv[++i]); break;
       case '--interval': {
         const v = Number(argv[++i]);
         if (Number.isNaN(v) || v < MIN_INTERVAL_SEC) {
@@ -225,8 +225,8 @@ function applyCliOverrides(cfg: AppConfig, args: CliArgs): AppConfig {
     targetDir: args.target ?? cfg.targetDir,
     backupDir: args.backupDir ?? cfg.backupDir,
     intervalSec: args.interval ?? cfg.intervalSec,
-    // CLI 传入的 ignore-dir 追加到 config 列表后面(不去重,让 syncer 内部 buildIgnorePrefixes 去重)
-    ignoreDirs: [...(cfg.ignoreDirs ?? []), ...args.ignoreDirs],
+    // CLI 传入的 ignore-dir 追加到 config 列表后面(不去重,让 syncer 内部 buildIgnoreItems 去重)
+    ignoreItems: [...(cfg.ignoreItems ?? []), ...args.ignoreItems],
   };
 }
 
