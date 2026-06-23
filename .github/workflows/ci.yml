@@ -57,12 +57,16 @@ jobs:
             artifact: auto-updater-windows-x64
             artifact_glob: 'release/*.exe'
           # macOS Apple Silicon (M1/M2/M3/M4)
-          # 只要顶层 dmg/zip,不要 mac-arm64/AppName.app/ 整个 bundle
+          # 不要 mac-arm64/AppName.app/ 整个 bundle,只要顶层 dmg + zip
+          # 注意:upload-artifact@v4 不支持 brace expansion `*.{dmg,zip}`,
+          # 用多行 path 每行一个 glob
           - os: macos-14
             label: macos-arm64
             script: build:mac:arm64
             artifact: auto-updater-macos-arm64
-            artifact_glob: 'release/*.{dmg,zip}'
+            artifact_glob: |
+              release/*.dmg
+              release/*.zip
           # macOS Intel x64 — 用 M1 runner (macos-14) 交叉编译
           # GitHub 的 macos-13 Intel runner pool 缩水、排队严重;借 Rosetta 出 x64 dmg 更快
           # electron-builder 在 arm64 host 上 build --x64 走 Rosetta,Apple 官方支持
@@ -70,7 +74,9 @@ jobs:
             label: macos-x64
             script: build:mac:x64
             artifact: auto-updater-macos-x64
-            artifact_glob: 'release/*.{dmg,zip}'
+            artifact_glob: |
+              release/*.dmg
+              release/*.zip
           # Linux x64 AppImage(只要顶层 *.AppImage,不要 linux-unpacked/)
           - os: ubuntu-latest
             label: linux-x64
