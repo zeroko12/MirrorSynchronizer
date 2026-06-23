@@ -55,14 +55,14 @@ jobs:
             label: windows-x64
             script: build:win
             artifact: auto-updater-windows-x64
-            artifact_glob: 'release/windows-x64/*.exe'
+            artifact_glob: 'release/*.exe'
           # macOS Apple Silicon (M1/M2/M3/M4)
           # 只要顶层 dmg/zip,不要 mac-arm64/AppName.app/ 整个 bundle
           - os: macos-14
             label: macos-arm64
             script: build:mac:arm64
             artifact: auto-updater-macos-arm64
-            artifact_glob: 'release/macos-arm64/*.{dmg,zip}'
+            artifact_glob: 'release/*.{dmg,zip}'
           # macOS Intel x64 — 用 M1 runner (macos-14) 交叉编译
           # GitHub 的 macos-13 Intel runner pool 缩水、排队严重;借 Rosetta 出 x64 dmg 更快
           # electron-builder 在 arm64 host 上 build --x64 走 Rosetta,Apple 官方支持
@@ -70,20 +70,20 @@ jobs:
             label: macos-x64
             script: build:mac:x64
             artifact: auto-updater-macos-x64
-            artifact_glob: 'release/macos-x64/*.{dmg,zip}'
+            artifact_glob: 'release/*.{dmg,zip}'
           # Linux x64 AppImage(只要顶层 *.AppImage,不要 linux-unpacked/)
           - os: ubuntu-latest
             label: linux-x64
             script: build:linux
             artifact: auto-updater-linux-x64
-            artifact_glob: 'release/linux-x64/*.AppImage'
+            artifact_glob: 'release/*.AppImage'
           # Linux ARM64 AppImage(树莓派 / ARM 服务器 / Graviton)
           # ubuntu-22.04-arm 是 GitHub-hosted ARM64 runner (AWS Graviton)
           - os: ubuntu-22.04-arm
             label: linux-arm64
             script: build:linux:arm64
             artifact: auto-updater-linux-arm64
-            artifact_glob: 'release/linux-arm64/*.AppImage'
+            artifact_glob: 'release/*.AppImage'
     steps:
       - uses: actions/checkout@v4
 
@@ -109,14 +109,17 @@ jobs:
         run: npx electron-builder install-app-deps
 
       # electron-vite build(产物在 out/) + electron-builder
-      # --config.directories.output 让 electron-builder 输出到平台专属子目录
-      # 避免本地多平台调试时不同 runner 产物互相覆盖(虽然 CI 是各自独立 runner)
+      # 输出统一写到 release/ 根(electron-builder 默认行为)
+      # 平台间不冲突:每个矩阵 entry 跑在独立 runner 上,各自独立的 release/
+      # upload step 用矩阵专属的 glob(`release/*.exe` / `*.dmg` 等)精确匹配
+      # 加 set -e + set -o pipefail 让 build 失败立刻冒泡,避免静默成功
       - name: Build installer
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
           ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
         run: |
-          npm run ${{ matrix.script }} -- --config.directories.output=release/${{ matrix.label }}
+          set -euo pipefail
+          npm run ${{ matrix.script }}
         shell: bash
 
       - name: Upload artifact
