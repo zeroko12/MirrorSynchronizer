@@ -957,7 +957,6 @@ function formatTime(ts: number | null): string {
             若文件被目标程序锁住会跳过 + 警告,关闭程序后再次点击重试。
           </n-text>
         </n-alert>
-        </n-form-item>
 
         <n-divider />
 
