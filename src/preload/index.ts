@@ -38,6 +38,23 @@ const api = {
    */
   runSyncNowForce: (): Promise<{ ok: boolean; result?: unknown; error?: string }> =>
     ipcRenderer.invoke('sync:runNowForce'),
+
+  /** P6 staging 模式:立即把 stagingDir 待应用内容 mv 到 target */
+  syncApplyNow: (): Promise<{
+    ok: boolean;
+    applied: number;
+    blocked: number;
+    warnings: string[];
+    error?: string;
+  }> => ipcRenderer.invoke('sync:applyNow'),
+
+  /** P6 staging 模式:取消待应用更新(清空 stagingDir) */
+  syncClearStaging: (): Promise<{ ok: boolean; cleared?: number; error?: string }> =>
+    ipcRenderer.invoke('sync:clearStaging'),
+
+  /** P6 staging 模式:查待应用文件数(给 UI banner) */
+  syncPendingApplyCount: (): Promise<number> =>
+    ipcRenderer.invoke('sync:pendingApplyCount'),
   loadConfig: (): Promise<unknown> => ipcRenderer.invoke('config:load'),
   saveConfig: (config: unknown): Promise<SaveConfigResult> =>
     ipcRenderer.invoke('config:save', config),

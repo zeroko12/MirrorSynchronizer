@@ -19,6 +19,8 @@ const emptyConfig = (): AppConfig => ({
   autostart: false,
   fileMappings: [],
   ignoreItems: [],
+  applyMode: 'staging',
+  stagingDir: '',
 });
 
 export function useConfig() {

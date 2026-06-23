@@ -24,6 +24,8 @@ const DEFAULT_CONFIG: AppConfig = {
   applyMappingsImmediately: true,
   fileMappings: [],
   ignoreItems: [],
+  applyMode: 'staging',
+  stagingDir: '',
   remote: {
     enabled: true,           // 默认开启
     port: 9527,              // 默认端口
@@ -113,6 +115,19 @@ export class ConfigManager {
     if (config.backupCount > MAX_BACKUP_COUNT) errors.push(`backupCount > ${MAX_BACKUP_COUNT}`);
     if (config.backupDir && config.backupDir === config.targetDir) {
       errors.push('backupDir 不能等于 targetDir(否则镜像同步会误删备份)');
+    }
+    // stagingDir 校验 — 仅当用户显式配置时检查(空 = 派生,无需查)
+    if (config.stagingDir) {
+      if (config.stagingDir === config.targetDir) {
+        errors.push('stagingDir 不能等于 targetDir(否则 staging 内容会被 sync 扫描误判)');
+      }
+      if (config.stagingDir === config.sourceDir) {
+        errors.push('stagingDir 不能等于 sourceDir');
+      }
+    }
+    // applyMode 校验
+    if (config.applyMode !== 'immediate' && config.applyMode !== 'staging') {
+      errors.push(`applyMode 必须是 'immediate' 或 'staging',当前: ${String(config.applyMode)}`);
     }
     // ignoreItems 校验 — 拒绝空、`.`、含 `..`、绝对路径、重复
     // (规范化在 syncer 里做,这里只校验合法性)

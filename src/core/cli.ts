@@ -36,6 +36,8 @@ interface CliArgs {
   backupDir?: string;
   interval?: number;
   ignoreItems: string[];
+  applyMode?: 'immediate' | 'staging';
+  stagingDir?: string;
   quiet: boolean;
 }
 
@@ -66,6 +68,15 @@ function parseArgs(argv: string[]): CliArgs {
       case '--target': out.target = argv[++i]; break;
       case '--backup-dir': out.backupDir = argv[++i]; break;
       case '--ignore-dir': out.ignoreItems.push(argv[++i]); break;
+      case '--apply-mode': {
+        const v = argv[++i];
+        if (v !== 'immediate' && v !== 'staging') {
+          throw new Error(`--apply-mode 必须是 immediate 或 staging,当前: ${v}`);
+        }
+        out.applyMode = v;
+        break;
+      }
+      case '--staging-dir': out.stagingDir = argv[++i]; break;
       case '--interval': {
         const v = Number(argv[++i]);
         if (Number.isNaN(v) || v < MIN_INTERVAL_SEC) {
@@ -102,6 +113,8 @@ function printHelp(): void {
   --target <dir>          覆盖目标目录
   --backup-dir <dir>      覆盖备份目录(空 = 默认派生自 targetDir)
   --ignore-dir <dir>      追加忽略目录(可多次,相对 target 根)
+  --apply-mode <mode>     覆盖应用模式 (immediate|staging)
+  --staging-dir <dir>     覆盖 staging 目录(staging 模式生效)
   --interval <sec>        覆盖检查间隔(秒, >= 60)
   --quiet                 减少日志
   -h, --help              显示帮助
@@ -227,6 +240,8 @@ function applyCliOverrides(cfg: AppConfig, args: CliArgs): AppConfig {
     intervalSec: args.interval ?? cfg.intervalSec,
     // CLI 传入的 ignore-dir 追加到 config 列表后面(不去重,让 syncer 内部 buildIgnoreItems 去重)
     ignoreItems: [...(cfg.ignoreItems ?? []), ...args.ignoreItems],
+    applyMode: args.applyMode ?? cfg.applyMode,
+    stagingDir: args.stagingDir ?? cfg.stagingDir,
   };
 }
 

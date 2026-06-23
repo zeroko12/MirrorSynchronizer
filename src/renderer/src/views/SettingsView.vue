@@ -85,6 +85,60 @@ function removeIgnoreItem(idx: number) {
   config.value = { ...config.value, ignoreItems: next };
 }
 
+/** P6:staging 模式 — 待应用更新文件数 + 操作 */
+const pendingApplyCount = ref(0);
+const applying = ref(false);
+const effectiveStagingDir = computed(() => {
+  const c = config.value;
+  if (!c?.targetDir) return '';
+  return c.stagingDir || `${c.targetDir.replace(/[\\/]+$/, '')}-staging`;
+});
+
+async function refreshPendingApplyCount() {
+  if (config.value?.applyMode !== 'staging') {
+    pendingApplyCount.value = 0;
+    return;
+  }
+  try {
+    pendingApplyCount.value = await getApi().syncPendingApplyCount();
+  } catch {
+    pendingApplyCount.value = 0;
+  }
+}
+
+async function applyPendingNow() {
+  applying.value = true;
+  try {
+    const r = await getApi().syncApplyNow();
+    if (r.ok) {
+      message.success(`应用完成:${r.applied} 个文件,${r.blocked} 个被锁跳过`);
+      await refreshStatus();
+    } else {
+      message.error(r.error ?? '应用失败');
+    }
+    await refreshPendingApplyCount();
+  } finally {
+    applying.value = false;
+  }
+}
+
+async function clearPendingStaging() {
+  if (!confirm('确认清空 staging 目录?所有待应用更新将被丢弃(已 sync 进 target/ 的不受影响)。')) {
+    return;
+  }
+  try {
+    const r = await getApi().syncClearStaging();
+    if (r.ok) {
+      message.success(`已清空 ${r.cleared ?? 0} 个文件`);
+      await refreshPendingApplyCount();
+    } else {
+      message.error(r.error ?? '清空失败');
+    }
+  } catch (err) {
+    message.error((err as Error).message ?? '清空失败');
+  }
+}
+
 /**
  * 把对话返回的绝对路径转成相对 targetDir 的路径。
  * - Windows 路径分隔符统一为 `/`
@@ -420,6 +474,7 @@ const message = useMessage();
 onMounted(async () => {
   await load();
   await refreshStatus();
+  await refreshPendingApplyCount();
   // 加载 P4 弹窗开关
   const state = await getApi().stateGet();
   if (state) popupEnabled.value = state.popupEnabled;
@@ -513,9 +568,10 @@ async function refreshStatus() {
   const fc = await tryLog('countFiles', () => getApi().countFiles());
   if (fc) fileCount.value = fc;
   startCountdownIfNeeded();
+  await refreshPendingApplyCount();
 }
 
-async function pickFolder(field: 'sourceDir' | 'targetDir' | 'backupDir') {
+async function pickFolder(field: 'sourceDir' | 'targetDir' | 'backupDir' | 'stagingDir') {
   const cur = config.value[field];
   const res = await getApi().selectFolder(cur || undefined);
   if (!res.canceled && res.path) {
@@ -827,6 +883,72 @@ function formatTime(ts: number | null): string {
               开启时:添加/编辑/启用映射 → 立刻拉过来,不用等 60s 同步周期;关闭时:等下次源变化时一起同步
             </span>
           </template>
+        </n-form-item>
+
+        <n-form-item label="应用模式(应对目标程序运行时文件被锁)">
+          <n-radio-group
+            :value="config.applyMode"
+            @update:value="(v: 'immediate' | 'staging') => (config.value = { ...config.value, applyMode: v })"
+          >
+            <n-radio value="staging">
+              <b>staging(推荐)</b>
+            </n-radio>
+            <n-radio value="immediate">immediate(旧行为,直接写)</n-radio>
+          </n-radio-group>
+          <n-text depth="3" style="display: block; margin-top: 8px; font-size: 12px; line-height: 1.6">
+            <div>
+              <b>staging 模式</b>:新文件先写到 <code>{{ effectiveStagingDir || '(待配置 targetDir)' }}</code>,
+              目标程序退出后自动 swap 到目标。下次 sync 或应用启动时会自动检测 + 应用。
+            </div>
+            <div>
+              <b>immediate 模式</b>:直接写到 <code>{{ config.targetDir || '(未配置)' }}</code>,
+              遇文件锁会失败,不推荐用于更新正在运行的程序。
+            </div>
+          </n-text>
+        </n-form-item>
+
+        <n-form-item v-if="config.applyMode === 'staging'" label="Staging 目录(留空 = 派生)">
+          <n-space :wrap="false" style="width: 100%">
+            <n-input
+              :value="config.stagingDir"
+              @update:value="(v: string) => (config.value = { ...config.value, stagingDir: v })"
+              :placeholder="effectiveStagingDir"
+              style="width: 460px"
+            />
+            <n-button @click="pickFolder('stagingDir')">浏览…</n-button>
+          </n-space>
+          <template #feedback>
+            <span style="font-size: 12px; color: #6b7785">
+              留空默认派生自 targetDir:<code>{{ effectiveStagingDir }}</code>
+            </span>
+          </template>
+        </n-form-item>
+
+        <n-alert
+          v-if="config.applyMode === 'staging' && pendingApplyCount > 0"
+          type="warning"
+          :show-icon="true"
+          style="margin: 12px 0"
+        >
+          <template #header>
+            <b>{{ pendingApplyCount }}</b> 个文件待应用更新
+          </template>
+          <div style="margin-top: 6px">
+            Staging 目录:<code style="font-size: 11px">{{ effectiveStagingDir }}</code>
+          </div>
+          <n-space style="margin-top: 12px">
+            <n-button size="small" type="primary" :loading="applying" @click="applyPendingNow">
+              立即应用
+            </n-button>
+            <n-button size="small" :disabled="applying" @click="clearPendingStaging">
+              取消(清空 staging)
+            </n-button>
+          </n-space>
+          <n-text depth="3" style="display: block; margin-top: 8px; font-size: 12px">
+            立即应用:把 staging 内容 mv 到 target(原子 rename,毫秒级)。
+            若文件被目标程序锁住会跳过 + 警告,关闭程序后再次点击重试。
+          </n-text>
+        </n-alert>
         </n-form-item>
 
         <n-divider />

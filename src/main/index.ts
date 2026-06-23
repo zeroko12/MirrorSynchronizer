@@ -16,6 +16,8 @@ import { join } from 'node:path';
 import { ConfigManager, DEFAULT_CONFIG } from '../core/config.js';
 import { Scheduler } from '../core/scheduler.js';
 import { Syncer } from '../core/syncer.js';
+import { applyPending, clearStaging, countPendingApply, hasPendingApply } from '../core/swapper.js';
+import { deriveDefaultStagingDir } from '../core/types.js';
 import { Backupper } from '../core/backupper.js';
 import { HistoryDB, ensureHistoryDir } from '../core/history.js';
 import { Indexer } from '../core/indexer.js';
@@ -108,6 +110,52 @@ function registerIpc(): void {
     if (!scheduler) return { ok: false, error: 'scheduler not ready' };
     const result = await scheduler.runNow({ force: true });
     return { ok: true, result };
+  });
+
+  // P6:staging 模式 — 立即应用 staging 中待 swap 的内容到 target
+  ipcMain.handle('sync:applyNow', async () => {
+    if (!currentConfig || !scheduler) {
+      return { ok: false, error: 'scheduler/config not ready', applied: 0, blocked: 0, warnings: [] };
+    }
+    if (currentConfig.applyMode !== 'staging') {
+      return { ok: false, error: '当前不是 staging 模式', applied: 0, blocked: 0, warnings: [] };
+    }
+    const stagingDir = currentConfig.stagingDir || deriveDefaultStagingDir(currentConfig.targetDir);
+    try {
+      const r = await applyPending({
+        targetDir: currentConfig.targetDir,
+        stagingDir,
+        backupDir: currentConfig.backupDir || '',
+        backupCount: currentConfig.backupCount,
+      });
+      // 通知 renderer(swap 完可能有新状态)
+      const w = getMainWindow();
+      if (w && !w.isDestroyed()) {
+        w.webContents.send('sync:result', { ok: r.ok, applied: r.applied, blocked: r.blocked });
+      }
+      return { ok: r.ok, applied: r.applied.length, blocked: r.blocked.length, warnings: r.warnings, error: r.fatalError };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message, applied: 0, blocked: 0, warnings: [] };
+    }
+  });
+
+  // P6:取消 staging 待应用(清空 stagingDir)
+  ipcMain.handle('sync:clearStaging', async () => {
+    if (!currentConfig) return { ok: false, error: 'config not ready' };
+    if (currentConfig.applyMode !== 'staging') {
+      return { ok: false, error: '当前不是 staging 模式' };
+    }
+    const stagingDir = currentConfig.stagingDir || deriveDefaultStagingDir(currentConfig.targetDir);
+    const r = await clearStaging({ stagingDir });
+    return r;
+  });
+
+  // P6:查 staging 待应用文件数(给 UI banner)
+  ipcMain.handle('sync:pendingApplyCount', async () => {
+    if (!currentConfig) return 0;
+    if (currentConfig.applyMode !== 'staging') return 0;
+    const stagingDir = currentConfig.stagingDir || deriveDefaultStagingDir(currentConfig.targetDir);
+    return await countPendingApply(stagingDir);
   });
 
   // P2: 完整配置读写
@@ -608,6 +656,26 @@ app.whenReady().then(async () => {
   scheduler.setDryRunMode(initialState.popupEnabled);
   scheduler.start();
   log.info(`[scheduler] 已启动,立即跑一次,然后每 ${currentConfig.intervalSec}s 一次 · dryRun=${initialState.popupEnabled}`);
+
+  // 启动时:staging 模式下,如果有 pending 更新,先尝试 swap(目标程序已退出时最常见)
+  if (currentConfig.applyMode === 'staging') {
+    const stagingDir = currentConfig.stagingDir || deriveDefaultStagingDir(currentConfig.targetDir);
+    if (await hasPendingApply(stagingDir)) {
+      try {
+        log.info(`[startup] 检测到 pending apply,执行 swap`);
+        const r = await applyPending({
+          targetDir: currentConfig.targetDir,
+          stagingDir,
+          backupDir: currentConfig.backupDir || '',
+          backupCount: currentConfig.backupCount,
+        });
+        for (const w of r.warnings) log.warn(`[swap] ${w}`);
+        log.info(`[startup] swap 完成 applied=${r.applied.length} blocked=${r.blocked.length}`);
+      } catch (err) {
+        log.error(`[startup] swap 失败: ${(err as Error).message}`);
+      }
+    }
+  }
 
   // 启动远程访问(如果启用)
   await startRemoteIfEnabled();

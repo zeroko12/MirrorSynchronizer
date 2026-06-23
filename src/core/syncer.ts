@@ -23,7 +23,7 @@ import { dirname, join, sep } from 'node:path';
 import { Indexer, type ScanResult } from './indexer.js';
 import { Backupper } from './backupper.js';
 import { coreLog } from './logger.js';
-import { deriveDefaultBackupDir, type AppConfig, type FileEntry, type FileMapping, type SyncResult } from './types.js';
+import { deriveDefaultBackupDir, deriveDefaultStagingDir, type AppConfig, type FileEntry, type FileMapping, type SyncResult } from './types.js';
 import {
   classifyErrno,
   classifyFetchError,
@@ -240,6 +240,13 @@ export class Syncer {
     // 0. 规范化 ignoreItems(空数组 = 不过滤任何东西)
     const ignoreItems = buildIgnoreItems(this.config.ignoreItems);
 
+    // 0.5 计算写入目录:staging 模式下写到 stagingDir(避开文件锁),
+    //     immediate 模式下直接写 targetDir。
+    //     扫描仍扫 targetDir(diff 的真相源 = 目标当前状态)。
+    const writeDir = this.config.applyMode === 'staging'
+      ? (this.config.stagingDir || deriveDefaultStagingDir(targetDir))
+      : targetDir;
+
     // 1. 扫描源(通过 SourceAdapter — 自动选 FsAdapter 或 HttpAdapter)
     const adapter = pickAdapter(sourceDir);
     let sourceFilesAll: FileEntry[] = [];
@@ -338,8 +345,11 @@ export class Syncer {
     }
 
     // 3.7 创建快照(任一变化都触发:增/改/删)— dryRun 时跳过
+    // staging 模式下不创建 backup:backup 跟 swap 绑定,在 swap 模块里做
+    // (swap 时创建 backup 是 swap-前的状态,sync 阶段的 backup 浪费空间)
     if (
       !dryRun &&
+      writeDir === targetDir &&
       (plannedModified.length > 0 || plannedDeleted.length > 0 || plannedAdded.length > 0)
     ) {
       try {
@@ -364,7 +374,17 @@ export class Syncer {
       result.warnings.push('(dryRun 模式,实际未创建快照)');
     }
 
+    // 3.8 staging 模式:确保 stagingDir 存在(首次 sync 时)
+    if (!dryRun && writeDir !== targetDir) {
+      try {
+        await fs.mkdir(writeDir, { recursive: true });
+      } catch (err) {
+        result.warnings.push(`创建 staging 目录失败: ${(err as Error).message}`);
+      }
+    }
+
     // 4. ADD / MODIFY / UNCHANGED
+    let pendingWrittenCount = 0; // staging 模式下写入 staging 的文件数
     for (const [rel, sFile] of sourceMap) {
       const tFile = targetMap.get(rel);
       const isNew = !lastIndexMap.has(rel);
@@ -378,7 +398,8 @@ export class Syncer {
         else result.modified.push(rel);
         if (!dryRun) {
           try {
-            await this.copyFromAdapter(adapter, targetDir, sFile);
+            await this.copyFromAdapter(adapter, writeDir, sFile);
+            if (writeDir !== targetDir) pendingWrittenCount++;
           } catch (err) {
             const outcome = this.classifyAdapterError(err, sourceDir);
             if (shouldAbortOnError(outcome.reason)) {
@@ -402,7 +423,19 @@ export class Syncer {
       }
     }
 
+    // 4.1 staging 模式:写完标记 .pending-apply(让 swap 知道有内容)
+    if (!dryRun && writeDir !== targetDir && pendingWrittenCount > 0) {
+      try {
+        await fs.writeFile(join(writeDir, '.pending-apply'), '');
+      } catch (err) {
+        result.warnings.push(`写 .pending-apply 标记失败: ${(err as Error).message}`);
+      }
+      result.pendingApplyCount = pendingWrittenCount;
+    }
+
     // 5. DELETE (镜像模式,但映射目标路径 + ignoreItems 豁免)
+    // staging 模式下:不删 target/ 里的文件(避免删正在运行的程序),
+    //   只清 stagingDir/ 里多余的"孤儿"(防止 swap 时把它们带过去)
     for (const [rel] of targetMap) {
       if (sourceMap.has(rel)) continue; // 源里有,肯定不删
       if (exemptFromMirrorDelete.has(normalize(rel))) continue; // 映射目标 / 忽略目录,豁免
@@ -410,8 +443,10 @@ export class Syncer {
       result.deleted.push(rel);
       if (!dryRun) {
         try {
-          const targetPath = join(targetDir, rel);
-          await fs.unlink(targetPath);
+          // staging 模式下写 dir 是 staging(清 staging 里多余的孤儿);
+          // immediate 模式直接删 target/
+          const deletePath = writeDir !== targetDir ? join(writeDir, rel) : join(targetDir, rel);
+          await fs.unlink(deletePath);
         } catch (err) {
           const code = (err as NodeJS.ErrnoException).code;
           if (code === 'ENOENT') continue; // 已不存在,跳过
@@ -431,9 +466,10 @@ export class Syncer {
     // 6. 文件映射
     // 注意:映射不参与 dryRun — 因为映射是用户主动配的"始终保持"规则,
     // 不是被检测出来的"源变化"。即便弹窗模式开启,映射也应该立即生效。
+    // staging 模式下:映射写入也走 stagingDir(避开文件锁)
     for (const mapping of fileMappings) {
       if (!mapping.enabled) continue;
-      await this.applyMapping(mapping, targetMap, result, false);
+      await this.applyMapping(mapping, targetMap, result, false, writeDir);
     }
 
     result.ok = !result.fatalError;
@@ -497,6 +533,7 @@ export class Syncer {
     targetMap: Map<string, FileEntry>,
     result: SyncResult,
     dryRun = false,
+    overrideWriteDir?: string, // staging 模式下 = stagingDir;不传 = targetDir
   ): Promise<void> {
     const relPath = resolveMappingRelPath(mapping);
     if (!relPath) {
@@ -512,7 +549,8 @@ export class Syncer {
       return;
     }
 
-    const targetPath = join(this.config.targetDir, relPath);
+    const writeDir = overrideWriteDir ?? this.config.targetDir;
+    const targetPath = join(writeDir, relPath);
     const targetExists = targetMap.has(relPath);
 
     coreLog.info(

@@ -10,7 +10,9 @@
 
 import { promises as fs } from 'node:fs';
 import { Syncer } from './syncer.js';
+import { applyPending, hasPendingApply } from './swapper.js';
 import type { AppConfig, FileEntry, SchedulerStatus, SyncResult } from './types.js';
+import { deriveDefaultStagingDir } from './types.js';
 import { isNetworkReason, type PathErrorKind } from './errors.js';
 import { atomicWriteJson } from './fs-utils.js';
 import { CONSECUTIVE_FAILURES_THRESHOLD, MAX_BACKOFF_MS } from './constants.js';
@@ -109,6 +111,9 @@ export class Scheduler {
    *   当前是弹窗询问模式也会真的拷贝/删除并落盘索引。
    *   非 force 时则尊重当前 dryRunMode(只算 diff 不动盘)。
    *
+   * staging 模式:每次 sync 开始前自动检查 stagingDir 有无 pending,
+   *   有就先 swap(避开文件锁),然后再跑常规 sync。
+   *
    * 用 try/finally 还原 dryRunMode,即便 runOnce 抛错也不会污染下次调度。
    */
   async runNow(options: { force?: boolean } = {}): Promise<SyncResult | null> {
@@ -119,6 +124,21 @@ export class Scheduler {
       coreLog.info('[scheduler] runNow force=true(临时关闭 dryRun)');
     }
     try {
+      // staging 模式 + 有 pending → 先 swap
+      if (!this.dryRunMode && this.config.applyMode === 'staging') {
+        const stagingDir = this.config.stagingDir || deriveDefaultStagingDir(this.config.targetDir);
+        if (await hasPendingApply(stagingDir)) {
+          coreLog.info(`[scheduler] 检测到 pending apply,先 swap 再 sync`);
+          const swapResult = await applyPending({
+            targetDir: this.config.targetDir,
+            stagingDir,
+            backupDir: this.config.backupDir || '',
+            backupCount: this.config.backupCount,
+          });
+          for (const w of swapResult.warnings) coreLog.warn(`[swap] ${w}`);
+          coreLog.info(`[scheduler] swap 完成 applied=${swapResult.applied.length} blocked=${swapResult.blocked.length}`);
+        }
+      }
       return await this.runOnce();
     } finally {
       if (options.force && prevDryRun) {

@@ -67,6 +67,12 @@ declare global {
        * 强制真同步 — 即便弹窗模式也立刻真删真拷。用于"保存并立即同步"按钮。
        */
       runSyncNowForce: () => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+      /** P6 staging 模式:立即应用 staging 中待 swap 的内容 */
+      syncApplyNow: () => Promise<{ ok: boolean; applied: number; blocked: number; warnings: string[]; error?: string }>;
+      /** P6 staging 模式:取消待应用更新 */
+      syncClearStaging: () => Promise<{ ok: boolean; cleared?: number; error?: string }>;
+      /** P6 staging 模式:查待应用文件数 */
+      syncPendingApplyCount: () => Promise<number>;
       loadConfig: () => Promise<AppConfig>;
       saveConfig: (config: AppConfig) => Promise<SaveConfigResult>;
       selectFolder: (defaultPath?: string) => Promise<SelectFolderResult>;

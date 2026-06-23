@@ -22,6 +22,9 @@ function makeConfig(sourceDir: string, targetDir: string, overrides: Partial<App
     ...DEFAULT_CONFIG,
     sourceDir,
     targetDir,
+    // 测试默认 immediate(写 targetDir),新 staging 行为 opt-in
+    applyMode: 'immediate',
+    stagingDir: '',
     ...overrides,
   };
 }
@@ -162,7 +165,7 @@ describe('Syncer - 文件映射规则', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [],
+      ignoreItems: [], applyMode: "immediate", stagingDir: "",
       backupDir: '',
     };
   });
@@ -437,7 +440,7 @@ describe('Syncer - ignoreItems', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [],
+      ignoreItems: [], applyMode: "immediate", stagingDir: "",
       backupDir: '',
     };
   });
@@ -692,12 +695,136 @@ describe('Syncer - ignoreItems 工具函数', () => {
   });
 });
 
+describe('Syncer - applyMode=staging', () => {
+  let sourceDir: string;
+  let targetDir: string;
+  let stagingDir: string;
+  let localDir: string;
+  let config: AppConfig;
+
+  beforeEach(async () => {
+    sourceDir = await makeTempDir('stg-src-');
+    targetDir = await makeTempDir('stg-tgt-');
+    stagingDir = await makeTempDir('stg-stg-');
+    localDir = await makeTempDir('stg-local-');
+    config = {
+      sourceDir,
+      targetDir,
+      intervalSec: 60,
+      backupCount: 3,
+      autostart: false,
+      fileMappings: [],
+      ignoreItems: [],
+      applyMode: 'staging',  // ← 强制 staging 模式
+      stagingDir: '',
+      backupDir: '',
+    };
+  });
+  afterEach(async () => {
+    await rmTemp(sourceDir);
+    await rmTemp(targetDir);
+    await rmTemp(stagingDir);
+    await rmTemp(localDir);
+  });
+
+  it('staging 模式:新文件写到 stagingDir,targetDir 不动', async () => {
+    config.stagingDir = stagingDir;
+    await writeTree(sourceDir, [
+      { relPath: 'a.txt', content: 'a' },
+      { relPath: 'sub/b.txt', content: 'b' },
+    ]);
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    expect(result.ok).toBe(true);
+    expect(result.added.sort()).toEqual(['a.txt', 'sub/b.txt']);
+    expect(result.pendingApplyCount).toBe(2);
+    // target 里没有
+    const targetTree = await readTree(targetDir);
+    expect(targetTree.size).toBe(0);
+    // staging 里有
+    const stagingTree = await readTree(stagingDir);
+    expect(stagingTree.get('a.txt')).toBe('a');
+    expect(stagingTree.get('sub/b.txt')).toBe('b');
+    // .pending-apply 标记存在
+    await expect(fs.stat(join(stagingDir, '.pending-apply'))).resolves.toBeTruthy();
+  });
+
+  it('staging 模式:target 里的旧文件不会被删(避免误删正在运行的程序)', async () => {
+    config.stagingDir = stagingDir;
+    await writeTree(targetDir, [
+      { relPath: 'orphan.txt', content: 'OLD-orphan' },
+    ]);
+    await writeTree(sourceDir, [{ relPath: 'a.txt', content: 'a' }]);
+
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    // 镜像删除阶段记录 orphan.txt,但 staging 模式下 target 不删
+    expect(result.deleted).toEqual(['orphan.txt']);
+    expect((await readTree(targetDir)).has('orphan.txt')).toBe(true);
+    // staging 里也没有 orphan.txt(避免 swap 时带过去)
+    const stagingTree = await readTree(stagingDir);
+    expect(stagingTree.has('orphan.txt')).toBe(false);
+  });
+
+  it('staging 模式 + ignoreItems:被忽略的文件不进 staging', async () => {
+    config.stagingDir = stagingDir;
+    config.ignoreItems = ['cache'];
+    await writeTree(sourceDir, [
+      { relPath: 'a.txt', content: 'a' },
+      { relPath: 'cache/foo.txt', content: 'x' },
+    ]);
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    expect(result.added).toEqual(['a.txt']);
+    expect(result.added).not.toContain('cache/foo.txt');
+    // staging 里没有 cache/
+    const stagingTree = await readTree(stagingDir);
+    expect(stagingTree.has('cache/foo.txt')).toBe(false);
+    expect(stagingTree.has('a.txt')).toBe(true);
+  });
+
+  it('staging 模式 + fileMappings:映射写入 stagingDir', async () => {
+    config.stagingDir = stagingDir;
+    await writeFile(join(localDir, 'tmpl.ini'), 'NEW-tmpl');
+    config.fileMappings = [
+      {
+        id: '1', name: 'tmpl',
+        sourcePath: join(localDir, 'tmpl.ini'),
+        targetRelpath: 'config/tmpl.ini',
+        enabled: true, overwrite: true, ifSourceMissing: 'skip',
+      },
+    ];
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    expect(result.mappingCopied).toEqual(['tmpl']);
+    // staging 有,target 没有
+    expect((await readTree(stagingDir)).get('config/tmpl.ini')).toBe('NEW-tmpl');
+    expect((await readTree(targetDir)).has('config/tmpl.ini')).toBe(false);
+  });
+
+  it('immediate 模式:行为保持原样(写到 targetDir)', async () => {
+    config.applyMode = 'immediate';
+    await writeTree(sourceDir, [{ relPath: 'a.txt', content: 'a' }]);
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    expect(result.added).toEqual(['a.txt']);
+    expect(result.pendingApplyCount).toBeUndefined(); // immediate 不设这个
+    expect((await readTree(targetDir)).get('a.txt')).toBe('a');
+    expect((await readTree(stagingDir)).size).toBe(0); // staging 没碰
+  });
+});
+
 describe('ConfigManager - ignoreItems 校验', () => {
   it('拒绝空字符串、".", "..", 绝对路径、重复', async () => {
     const { ConfigManager } = await import('../src/core/config.js');
     const tmpCfg = await makeTempDir('cfg-test-');
     const cfgPath = join(tmpCfg, 'config.json');
-    const mgr = new ConfigManager({ configPath: cfgPath, defaults: { ...DEFAULT_CONFIG, ignoreItems: [] } });
+    const mgr = new ConfigManager({ configPath: cfgPath, defaults: { ...DEFAULT_CONFIG, ignoreItems: [], applyMode: "immediate", stagingDir: "", } });
     try {
       await expect(mgr.save({ ...DEFAULT_CONFIG, ignoreItems: ['cache', ''] as never })).rejects.toThrow(/ignoreItems/);
       await expect(mgr.save({ ...DEFAULT_CONFIG, ignoreItems: ['.', 'cache'] } as never)).rejects.toThrow(/ignoreItems/);
@@ -734,7 +861,7 @@ describe('Syncer - 边界与错误', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [],
+      ignoreItems: [], applyMode: "immediate", stagingDir: "",
       backupDir: '',
     };
     const syncer = new Syncer(config);
@@ -781,7 +908,7 @@ describe('Syncer - 边界与错误', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [],
+      ignoreItems: [], applyMode: "immediate", stagingDir: "",
       backupDir: '',
     };
     const syncer = new Syncer(config);
@@ -801,7 +928,7 @@ describe('Syncer - 边界与错误', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [],
+      ignoreItems: [], applyMode: "immediate", stagingDir: "",
       backupDir: '',
     };
     const syncer = new Syncer(config);
@@ -831,7 +958,7 @@ describe('Syncer - 性能', () => {
         backupCount: 3,
         autostart: false,
         fileMappings: [],
-      ignoreItems: [],
+      ignoreItems: [], applyMode: "immediate", stagingDir: "",
         backupDir: '',
       };
       const syncer = new Syncer(config);

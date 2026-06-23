@@ -60,6 +60,8 @@ export interface SyncResult {
   backupSnapshotPath?: string;
   /** 是否本次触发了备份 */
   backupCreated: boolean;
+  /** staging 模式下,写到 stagingDir 等 swap 的文件数。immediate 模式恒为 0 */
+  pendingApplyCount?: number;
 }
 
 /** 调度器状态 */
@@ -128,6 +130,20 @@ export interface AppConfig {
    */
   ignoreItems: string[];
   /**
+   * 同步应用模式
+   * - 'immediate': 直接写到 targetDir(旧行为,文件被锁会失败)
+   * - 'staging':   写到 stagingDir,swap 时再 mv 到 targetDir(文件锁安全)
+   * 默认 'staging'(新行为)。
+   * 切换 mode:下次 sync 起生效,无需重启。
+   */
+  applyMode: 'immediate' | 'staging';
+  /**
+   * staging 目录绝对路径(applyMode='staging' 时使用)。
+   * 空字符串 = 派生自 targetDir:`<targetDir>-staging`
+   * 类似 backupDir 的处理方式。不允许 == targetDir(否则跟镜像逻辑冲突)。
+   */
+  stagingDir: string;
+  /**
    * 远程服务器(同 LAN 浏览器访问,只读 + 弹窗决策)
    * v0.1:仅暴露状态/历史/备份,允许远程确认弹窗;远程编辑 config 在 v0.2
    * 默认开启,密码随机生成 + bcrypt 存盘
@@ -158,6 +174,19 @@ export function deriveDefaultBackupDir(targetDir: string): string {
   // 去除尾部斜杠,统一格式
   const trimmed = targetDir.replace(/[\\/]+$/, '');
   return `${trimmed}-backups`;
+}
+
+/**
+ * 由 targetDir 派生默认 staging 目录:
+ *   D:/game/data        -> D:/game/data-staging
+ *   /var/lib/myapp/data -> /var/lib/myapp/data-staging
+ *
+ * staging 是同步期间"暂存"位置(避开文件锁),
+ * swap 时再 mv 到 target。跟 backupDir 同 disk 模式。
+ */
+export function deriveDefaultStagingDir(targetDir: string): string {
+  const trimmed = targetDir.replace(/[\\/]+$/, '');
+  return `${trimmed}-staging`;
 }
 
 /** ConfigManager 选项 */
