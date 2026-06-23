@@ -94,6 +94,14 @@ const effectiveStagingDir = computed(() => {
   return c.stagingDir || `${c.targetDir.replace(/[\\/]+$/, '')}-staging`;
 });
 
+/** 模板里调用的 handlers(模板不能直接赋值 ref.value,需要走方法) */
+function onApplyModeChange(v: 'immediate' | 'staging') {
+  config.value = { ...config.value, applyMode: v };
+}
+function onStagingDirChange(v: string) {
+  config.value = { ...config.value, stagingDir: v };
+}
+
 async function refreshPendingApplyCount() {
   if (config.value?.applyMode !== 'staging') {
     pendingApplyCount.value = 0;
@@ -888,7 +896,7 @@ function formatTime(ts: number | null): string {
         <n-form-item label="应用模式(应对目标程序运行时文件被锁)">
           <n-radio-group
             :value="config.applyMode"
-            @update:value="(v: 'immediate' | 'staging') => (config.value = { ...config.value, applyMode: v })"
+            @update:value="onApplyModeChange"
           >
             <n-radio value="staging">
               <b>staging(推荐)</b>
@@ -911,7 +919,7 @@ function formatTime(ts: number | null): string {
           <n-space :wrap="false" style="width: 100%">
             <n-input
               :value="config.stagingDir"
-              @update:value="(v: string) => (config.value = { ...config.value, stagingDir: v })"
+              @update:value="onStagingDirChange"
               :placeholder="effectiveStagingDir"
               style="width: 460px"
             />
