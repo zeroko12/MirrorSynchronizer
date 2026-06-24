@@ -10,7 +10,8 @@
 
 import { promises as fs } from 'node:fs';
 import { Syncer } from './syncer.js';
-import { applyPending, hasPendingApply } from './swapper.js';
+import { applyPending, hasPendingApply, type SwapResult } from './swapper.js';
+import { isExecutableLocked, tryLaunchExecutable } from './launcher.js';
 import type { AppConfig, FileEntry, SchedulerStatus, SyncResult } from './types.js';
 import { deriveDefaultStagingDir } from './types.js';
 import { isNetworkReason, type PathErrorKind } from './errors.js';
@@ -40,6 +41,8 @@ export interface SchedulerOptions {
   indexCachePath?: string;
   /** 每次同步后回调 */
   onSync?: (result: SyncResult) => void | Promise<void>;
+  /** 同步前 preflight 回调(用于 renderer 显示文件锁警告) */
+  onPreflight?: (info: { executableLocked: boolean; relPath: string }) => void;
   /** 连续失败达到阈值时回调(默认 3) */
   onFatalError?: (consecutiveFailures: number, lastResult: SyncResult) => void;
 }
@@ -48,6 +51,7 @@ export class Scheduler {
   private config: AppConfig;
   private readonly indexCachePath: string | null;
   private readonly onSync?: SchedulerOptions['onSync'];
+  private readonly onPreflight?: SchedulerOptions['onPreflight'];
   private readonly onFatalError?: SchedulerOptions['onFatalError'];
 
   private timer: NodeJS.Timeout | null = null;
@@ -67,6 +71,7 @@ export class Scheduler {
     this.config = options.config;
     this.indexCachePath = options.indexCachePath ?? null;
     this.onSync = options.onSync;
+    this.onPreflight = options.onPreflight;
     this.onFatalError = options.onFatalError;
   }
 
@@ -111,25 +116,44 @@ export class Scheduler {
    *   当前是弹窗询问模式也会真的拷贝/删除并落盘索引。
    *   非 force 时则尊重当前 dryRunMode(只算 diff 不动盘)。
    *
+   * @param options.skipLaunch true = 同步后不启动目标可执行文件。
+   *   远程 trigger (onRemoteRunNow) 显式传 true,避免在服务端弹 GUI。
+   *
    * staging 模式:每次 sync 开始前自动检查 stagingDir 有无 pending,
    *   有就先 swap(避开文件锁),然后再跑常规 sync。
    *
    * 用 try/finally 还原 dryRunMode,即便 runOnce 抛错也不会污染下次调度。
    */
-  async runNow(options: { force?: boolean } = {}): Promise<SyncResult | null> {
+  async runNow(options: { force?: boolean; skipLaunch?: boolean } = {}): Promise<SyncResult | null> {
     if (this.inFlight) return null;
     const prevDryRun = this.dryRunMode;
     if (options.force && prevDryRun) {
       this.dryRunMode = false;
       coreLog.info('[scheduler] runNow force=true(临时关闭 dryRun)');
     }
+    let swapResult: SwapResult | null = null;
     try {
-      // staging 模式 + 有 pending → 先 swap
+      // 0. Pre-flight:检测目标可执行文件锁(只警告,不阻塞)
+      if (this.config.executablePath && !options.skipLaunch) {
+        try {
+          const locked = await isExecutableLocked(this.config.targetDir, this.config.executablePath);
+          if (this.onPreflight) {
+            this.onPreflight({
+              executableLocked: locked,
+              relPath: this.config.executablePath,
+            });
+          }
+        } catch (err) {
+          coreLog.warn(`[scheduler] preflight 失败: ${(err as Error).message}`);
+        }
+      }
+
+      // 1. staging 模式 + 有 pending → 先 swap
       if (!this.dryRunMode && this.config.applyMode === 'staging') {
         const stagingDir = this.config.stagingDir || deriveDefaultStagingDir(this.config.targetDir);
         if (await hasPendingApply(stagingDir)) {
           coreLog.info(`[scheduler] 检测到 pending apply,先 swap 再 sync`);
-          const swapResult = await applyPending({
+          swapResult = await applyPending({
             targetDir: this.config.targetDir,
             stagingDir,
             backupDir: this.config.backupDir || '',
@@ -139,11 +163,62 @@ export class Scheduler {
           coreLog.info(`[scheduler] swap 完成 applied=${swapResult.applied.length} blocked=${swapResult.blocked.length}`);
         }
       }
-      return await this.runOnce();
+
+      // 2. 常规 sync
+      const result = await this.runOnce();
+
+      // 3. Launch(只 success 时启动 + 不被 skipLaunch 跳过)
+      if (
+        !options.skipLaunch &&
+        this.config.executablePath &&
+        result &&
+        result.ok
+      ) {
+        await this.handleLaunch(result, swapResult);
+      }
+
+      return result;
     } finally {
       if (options.force && prevDryRun) {
         this.dryRunMode = prevDryRun;
       }
+    }
+  }
+
+  /**
+   * 同步完成后判定是否启动目标程序
+   * - 优先看 swapResult.executableUpdate(staging 模式 swap 后的状态)
+   * - 否则看 syncResult.executableUpdate(immediate 模式 sync 内部标记)
+   * - success → spawn detached,记 PID
+   * - blocked / skipped → 加 warning,不启动
+   */
+  private async handleLaunch(result: SyncResult, swap: SwapResult | null): Promise<void> {
+    const exe = this.config.executablePath;
+    if (!exe) return;
+
+    // 综合判断:swap 跑过用 swap 的状态,否则用 sync 的状态
+    let finalUpdate: 'success' | 'blocked' | 'skipped';
+    if (swap) {
+      finalUpdate = swap.executableUpdate ?? 'skipped';
+    } else {
+      finalUpdate = result.executableUpdate ?? 'success';
+    }
+
+    if (finalUpdate !== 'success') {
+      result.executableUpdate = finalUpdate;
+      result.warnings.push(
+        `可执行文件未启动(${finalUpdate === 'blocked' ? '被占用' : '不在 sync 范围'}): ${exe}`,
+      );
+      return;
+    }
+
+    // success → 启动
+    const lr = await tryLaunchExecutable(this.config.targetDir, exe);
+    result.executableUpdate = 'success';
+    if (lr.launched && lr.pid) {
+      result.launchedPid = lr.pid;
+    } else if (lr.reason) {
+      result.warnings.push(`启动失败(${lr.reason}): ${exe}`);
     }
   }
 

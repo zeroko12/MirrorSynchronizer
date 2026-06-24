@@ -21,6 +21,7 @@ const emptyConfig = (): AppConfig => ({
   ignoreItems: [],
   applyMode: 'staging',
   stagingDir: '',
+  executablePath: '',
 });
 
 export function useConfig() {

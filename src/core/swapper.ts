@@ -39,6 +39,8 @@ export interface SwapOptions {
   backupDir: string;
   /** 保留几个 backup(0 = 不轮转但仍创建) */
   backupCount: number;
+  /** 目标可执行文件(相对 targetDir),用于跟踪它的 update 状态 */
+  executablePath?: string;
 }
 
 export interface SwapResult {
@@ -54,6 +56,12 @@ export interface SwapResult {
   warnings: string[];
   /** 致命错误(整个 swap 中止,不会重试) */
   fatalError?: string;
+  /** 目标可执行文件的更新状态(只有 executablePath 配置时才填)
+   * - 'success': applied
+   * - 'blocked': blocked
+   * - 'skipped': 不在 swap 范围(没出现在 pendingFiles 里)
+   */
+  executableUpdate?: 'success' | 'blocked' | 'skipped';
 }
 
 /**
@@ -290,6 +298,10 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
     if (pendingFiles.length === 0) {
       // pending 标记文件存在但没有实际文件 = 异常状态,清掉
       await fs.unlink(join(stagingDir, PENDING_APPLY_FILE)).catch(() => undefined);
+      // executablePath 配置了但 staging 没内容 → 文件早被忽略或没动过
+      if (opts.executablePath) {
+        result.executableUpdate = 'skipped';
+      }
       result.ok = true;
       return result;
     }
@@ -310,6 +322,10 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
           await fs.unlink(srcPath);
         }
         result.applied.push(rel);
+        // ★ 跟踪目标可执行文件 swap 结果
+        if (opts.executablePath && rel === opts.executablePath) {
+          result.executableUpdate = 'success';
+        }
         coreLog.info(`[swap] applied: ${rel}`);
       } catch (err) {
         const e = err as NodeJS.ErrnoException;
@@ -317,6 +333,10 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
           // 文件被锁(或目录非空)→ 跳过 + 警告,下次重试
           result.blocked.push(rel);
           result.warnings.push(`swap 跳过(${e.code}): ${rel}`);
+          // ★ 跟踪目标可执行文件被锁
+          if (opts.executablePath && rel === opts.executablePath) {
+            result.executableUpdate = 'blocked';
+          }
         } else {
           // 其他错误(磁盘满、路径太长等)→ 跳过 + 警告
           result.blocked.push(rel);
@@ -345,6 +365,12 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
         `${result.blocked.length} 个文件 swap 失败(可能被锁),保留 staging 等下次重试`,
       );
       coreLog.warn(`[swap] 部分成功 applied=${result.applied.length} blocked=${result.blocked.length}`);
+    }
+
+    // 9. executablePath 配置了但不在 pendingFiles 里(ignoreItems 命中 / 文件没变化)
+    //    → 标记 skipped,scheduler 不会 launch
+    if (opts.executablePath && !result.executableUpdate) {
+      result.executableUpdate = 'skipped';
     }
   } catch (err) {
     result.fatalError = `swap 失败: ${(err as Error).message}`;

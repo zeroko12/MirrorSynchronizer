@@ -17,6 +17,7 @@ import { ConfigManager, DEFAULT_CONFIG } from '../core/config.js';
 import { Scheduler } from '../core/scheduler.js';
 import { Syncer } from '../core/syncer.js';
 import { applyPending, clearStaging, countPendingApply, hasPendingApply } from '../core/swapper.js';
+import { tryLaunchExecutable } from '../core/launcher.js';
 import { deriveDefaultStagingDir } from '../core/types.js';
 import { Backupper } from '../core/backupper.js';
 import { HistoryDB, ensureHistoryDir } from '../core/history.js';
@@ -127,13 +128,34 @@ function registerIpc(): void {
         stagingDir,
         backupDir: currentConfig.backupDir || '',
         backupCount: currentConfig.backupCount,
+        executablePath: currentConfig.executablePath,
       });
+      // swap 完后,如果 executableUpdate === 'success',启动目标程序
+      let launchedPid: number | undefined;
+      if (currentConfig.executablePath && r.executableUpdate === 'success') {
+        const lr = await tryLaunchExecutable(currentConfig.targetDir, currentConfig.executablePath);
+        if (lr.launched) launchedPid = lr.pid;
+      }
       // 通知 renderer(swap 完可能有新状态)
       const w = getMainWindow();
       if (w && !w.isDestroyed()) {
-        w.webContents.send('sync:result', { ok: r.ok, applied: r.applied, blocked: r.blocked });
+        w.webContents.send('sync:result', {
+          ok: r.ok,
+          applied: r.applied,
+          blocked: r.blocked,
+          executableUpdate: r.executableUpdate,
+          launchedPid,
+        });
       }
-      return { ok: r.ok, applied: r.applied.length, blocked: r.blocked.length, warnings: r.warnings, error: r.fatalError };
+      return {
+        ok: r.ok,
+        applied: r.applied.length,
+        blocked: r.blocked.length,
+        warnings: r.warnings,
+        error: r.fatalError,
+        executableUpdate: r.executableUpdate,
+        launchedPid,
+      };
     } catch (err) {
       return { ok: false, error: (err as Error).message, applied: 0, blocked: 0, warnings: [] };
     }
@@ -613,6 +635,13 @@ app.whenReady().then(async () => {
   scheduler = new Scheduler({
     config: currentConfig,
     indexCachePath: getIndexCachePath(),
+    // preflight 文件锁检测 → 转发到 renderer 显示警告 banner
+    onPreflight: (info) => {
+      const w = getMainWindow();
+      if (w && !w.isDestroyed()) {
+        w.webContents.send('sync:preflight', info);
+      }
+    },
     onSync: async (r) => {
       const wasRemoteSuppressed = suppressNextLocalPopup;
       await baseOnSync(r);
@@ -668,9 +697,15 @@ app.whenReady().then(async () => {
           stagingDir,
           backupDir: currentConfig.backupDir || '',
           backupCount: currentConfig.backupCount,
+          executablePath: currentConfig.executablePath,
         });
         for (const w of r.warnings) log.warn(`[swap] ${w}`);
         log.info(`[startup] swap 完成 applied=${r.applied.length} blocked=${r.blocked.length}`);
+        // swap 完后,如果 executableUpdate=success,启动目标程序
+        if (currentConfig.executablePath && r.executableUpdate === 'success') {
+          const lr = await tryLaunchExecutable(currentConfig.targetDir, currentConfig.executablePath);
+          if (lr.launched) log.info(`[startup] 已启动 ${currentConfig.executablePath} (PID=${lr.pid})`);
+        }
       } catch (err) {
         log.error(`[startup] swap 失败: ${(err as Error).message}`);
       }
@@ -730,7 +765,8 @@ async function startRemoteIfEnabled(): Promise<void> {
       // force=true:即便当前是弹窗询问模式(popupEnabled=true → dryRunMode=true),
       // 远程"立即同步"也是用户主动行为,必须真同步(拷贝/删除/落盘索引)。
       // 之前这里没传 force,导致 dryRun 模式下删除被吞,history 写了但 target 没动。
-      const result = await scheduler.runNow({ force: true });
+      // 远程 trigger 不启动目标程序(skipLaunch=true)— 服务端跑 GUI 没意义
+      const result = await scheduler.runNow({ force: true, skipLaunch: true });
       log.info(`[main] onRemoteRunNow: 同步完成 ok=${result?.ok} fatal=${!!result?.fatalError} added=${result?.added.length ?? 0} deleted=${result?.deleted.length ?? 0}`);
       // 主动推 snapshot + sync-result,确保 web UI 立即看到新 history
       if (remote) {

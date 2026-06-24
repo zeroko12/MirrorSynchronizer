@@ -78,6 +78,8 @@ declare global {
       selectFolder: (defaultPath?: string) => Promise<SelectFolderResult>;
       selectPath: (opts: { defaultPath?: string; mode: 'file' | 'folder' | 'both' }) => Promise<SelectPathResult>;
       onSyncResult?: (callback: (result: unknown) => void) => () => void;
+      // 订阅主进程推送的同步前 preflight(目标程序文件锁状态)
+      onSyncPreflight?: (callback: (info: { executableLocked: boolean; relPath: string }) => void) => () => void;
       countFiles: () => Promise<CountFilesResult>;
       historyList: (opts?: { limit?: number; offset?: number }) => Promise<HistoryListResult>;
       historyDelete: (id: number) => Promise<HistoryDeleteResult>;

@@ -416,6 +416,10 @@ export class Syncer {
             }
             // 非致命:warning 继续
             result.warnings.push(`拷贝失败: ${rel} (${outcome.reason ?? (err as Error).message})`);
+            // ★ 标记目标可执行文件被锁(immediate 模式 Layer 2 兜底)
+            if (rel === this.config.executablePath) {
+              result.executableUpdate = 'blocked';
+            }
           }
         }
       } else {

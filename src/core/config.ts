@@ -26,6 +26,7 @@ const DEFAULT_CONFIG: AppConfig = {
   ignoreItems: [],
   applyMode: 'staging',
   stagingDir: '',
+  executablePath: '',
   remote: {
     enabled: true,           // 默认开启
     port: 9527,              // 默认端口
@@ -128,6 +129,20 @@ export class ConfigManager {
     // applyMode 校验
     if (config.applyMode !== 'immediate' && config.applyMode !== 'staging') {
       errors.push(`applyMode 必须是 'immediate' 或 'staging',当前: ${String(config.applyMode)}`);
+    }
+    // executablePath 校验 — 空 = 禁用,非空走跟 ignoreItems 同样的规则
+    if (config.executablePath && typeof config.executablePath === 'string' && config.executablePath.trim()) {
+      const raw = config.executablePath;
+      const normalized = raw.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+      if (!normalized || normalized === '.') {
+        errors.push(`executablePath 不允许 "." 或空路径: "${raw}"`);
+      } else if (normalized.includes('..')) {
+        errors.push(`executablePath 不允许包含 "..": "${raw}"`);
+      } else if (normalized.includes(':')) {
+        errors.push(`executablePath 不允许绝对路径(包含 ":"): "${raw}"`);
+      } else if (config.executablePath === config.targetDir || config.executablePath === config.sourceDir) {
+        errors.push(`executablePath 不能等于 targetDir / sourceDir`);
+      }
     }
     // ignoreItems 校验 — 拒绝空、`.`、含 `..`、绝对路径、重复
     // (规范化在 syncer 里做,这里只校验合法性)

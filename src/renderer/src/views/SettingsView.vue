@@ -102,6 +102,59 @@ function onStagingDirChange(v: string) {
   config.value = { ...config.value, stagingDir: v };
 }
 
+/** P7:目标可执行文件(executablePath)配置 + UI 状态 */
+const newExecutablePath = ref('');
+const preflightLocked = ref(false);
+const preflightRelPath = ref('');
+const executableUpdateBlocked = ref(false);
+
+function validateExecutablePath(raw: string): string | null {
+  if (!raw || !raw.trim()) return '不能为空';
+  const normalized = raw.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  if (!normalized || normalized === '.') return '不能为 "." 或空';
+  if (normalized.includes('..')) return '不能包含 ".."';
+  if (normalized.includes(':')) return '不能是绝对路径(不能含 ":")';
+  return null;
+}
+
+function addExecutablePathFromInput() {
+  const err = validateExecutablePath(newExecutablePath.value);
+  if (err) {
+    message.error(`目标可执行文件路径非法: ${err}`);
+    return;
+  }
+  const normalized = newExecutablePath.value.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  config.value = { ...config.value, executablePath: normalized };
+  newExecutablePath.value = '';
+}
+
+function clearExecutablePath() {
+  config.value = { ...config.value, executablePath: '' };
+}
+
+async function pickExecutable() {
+  if (!config.value?.targetDir) {
+    message.warning('请先填写目标目录');
+    return;
+  }
+  const result = await getApi().selectPath({
+    defaultPath: config.value.targetDir,
+    mode: 'file',
+  });
+  if (result.canceled || !result.path) return;
+  // 算出相对 targetDir 的路径
+  const rel = absToRelPath(result.path, config.value.targetDir);
+  if (rel === null) {
+    message.error(`所选路径必须在目标目录内:\n${result.path}`);
+    return;
+  }
+  if (rel === '') {
+    message.warning('选了目标目录自身,无意义');
+    return;
+  }
+  config.value = { ...config.value, executablePath: rel };
+}
+
 async function refreshPendingApplyCount() {
   if (config.value?.applyMode !== 'staging') {
     pendingApplyCount.value = 0;
@@ -490,8 +543,22 @@ onMounted(async () => {
   const as = await tryLog('autostartGet', () => getApi().autostartGet());
   autostartEnabled.value = as?.openAtLogin ?? false;
   // 订阅同步结果事件(从 preload 的 onSyncResult 转发)
-  window.api.onSyncResult?.(() => {
+  window.api.onSyncResult?.((result: any) => {
     refreshStatus();
+    // 同步完成后,根据 executableUpdate 显示对应 toast
+    if (result?.executableUpdate === 'success' && result?.launchedPid) {
+      message.success(`已启动 ${config.value?.executablePath ?? ''} (PID=${result.launchedPid})`);
+    } else if (result?.executableUpdate === 'blocked') {
+      message.warning(`目标程序正在运行,${config.value?.executablePath ?? ''} 未替换`);
+      executableUpdateBlocked.value = true;
+    }
+  });
+  // 订阅同步前 preflight(目标程序文件锁)
+  window.api.onSyncPreflight?.((info) => {
+    if (info.executableLocked) {
+      preflightLocked.value = true;
+      preflightRelPath.value = info.relPath;
+    }
   });
   // 5 秒轮询由下面的 usePolling 在 onMounted 自动启动
   // 全局键盘监听(高级模式切换)
@@ -808,6 +875,78 @@ function formatTime(ts: number | null): string {
               </n-text>
             </n-space>
           </n-form-item>
+
+          <!-- P7:同步后启动目标程序 -->
+          <n-form-item label="同步后启动目标程序(可选)">
+            <n-space vertical style="width: 100%">
+              <n-space v-if="config.executablePath" align="center">
+                <n-tag type="info" size="small" closable @close="clearExecutablePath" style="font-family: monospace">
+                  {{ config.executablePath }}
+                </n-tag>
+                <n-button size="small" @click="pickExecutable">浏览…</n-button>
+              </n-space>
+              <n-space v-else :wrap="false">
+                <n-input
+                  v-model:value="newExecutablePath"
+                  placeholder="相对目标根的路径,例如 Game/MyGame.exe"
+                  style="width: 320px"
+                  @keydown.enter="addExecutablePathFromInput"
+                />
+                <n-button :disabled="!newExecutablePath.trim()" @click="addExecutablePathFromInput">
+                  设置
+                </n-button>
+                <n-button :disabled="!config.targetDir" @click="pickExecutable">浏览…</n-button>
+              </n-space>
+              <n-text depth="3" style="font-size: 12px; line-height: 1.7">
+                <div>
+                  配置后,**同步真正完成后**(staging 模式需等 swap 完成)自动启动该程序。
+                </div>
+                <div>
+                  如果目标程序正在运行,文件可能被占用 → 同步前会提示,关闭程序后再同步。
+                </div>
+              </n-text>
+            </n-space>
+          </n-form-item>
+
+          <!-- P7:同步前文件锁警告 banner -->
+          <n-alert
+            v-if="preflightLocked"
+            type="warning"
+            :show-icon="true"
+            closable
+            @close="preflightLocked = false"
+            style="margin: 8px 0 12px"
+          >
+            <template #header>
+              <b>目标程序正在运行</b>
+            </template>
+            <div>
+              文件 <code>{{ preflightRelPath }}</code> 正在被占用,同步可能无法替换。
+            </div>
+            <n-text depth="3" style="display: block; margin-top: 4px; font-size: 12px">
+              建议:关闭该程序后重新点击"保存并立即同步"。
+            </n-text>
+          </n-alert>
+
+          <!-- P7:同步后未替换警告 banner -->
+          <n-alert
+            v-if="executableUpdateBlocked"
+            type="error"
+            :show-icon="true"
+            closable
+            @close="executableUpdateBlocked = false"
+            style="margin: 8px 0 12px"
+          >
+            <template #header>
+              <b>目标可执行文件未替换</b>
+            </template>
+            <div>
+              <code>{{ config.executablePath }}</code> 被目标程序占用,本次同步未替换。
+            </div>
+            <n-text depth="3" style="display: block; margin-top: 4px; font-size: 12px">
+              下次 sync 时如果程序仍在运行,会再次尝试 — 关闭程序后重试即可生效。
+            </n-text>
+          </n-alert>
 
           <n-divider />
 

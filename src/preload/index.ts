@@ -70,6 +70,13 @@ const api = {
     return () => ipcRenderer.removeListener('sync:result', handler);
   },
 
+  // 订阅主进程推送的同步前 preflight 事件(目标程序是否被锁)
+  onSyncPreflight: (callback: (info: { executableLocked: boolean; relPath: string }) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, info: unknown) => callback(info as { executableLocked: boolean; relPath: string });
+    ipcRenderer.on('sync:preflight', handler);
+    return () => ipcRenderer.removeListener('sync:preflight', handler);
+  },
+
   // 调试:扫描源/目标文件数
   countFiles: (): Promise<CountFilesResult> => ipcRenderer.invoke('debug:countFiles'),
 

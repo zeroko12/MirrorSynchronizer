@@ -28,7 +28,7 @@ describe('Scheduler', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [], applyMode: "immediate", stagingDir: "",
+      ignoreItems: [], applyMode: "immediate", stagingDir: "", executablePath: "",
       backupDir: '',
     };
     results = [];
@@ -193,7 +193,7 @@ describe('Scheduler - 指数退避', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [], applyMode: "immediate", stagingDir: "",
+      ignoreItems: [], applyMode: "immediate", stagingDir: "", executablePath: "",
       backupDir: '',
     };
     const sch = new Scheduler({ config: cfg, indexCachePath });
@@ -238,7 +238,7 @@ describe('Scheduler - 指数退避', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [], applyMode: "immediate", stagingDir: "",
+      ignoreItems: [], applyMode: "immediate", stagingDir: "", executablePath: "",
       backupDir: '',
     };
     const sch = new Scheduler({ config: badCfg, indexCachePath });
@@ -267,7 +267,7 @@ describe('Scheduler - 指数退避', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [], applyMode: "immediate", stagingDir: "",
+      ignoreItems: [], applyMode: "immediate", stagingDir: "", executablePath: "",
       backupDir: '',
     };
     const sch = new Scheduler({ config: cfg, indexCachePath });
@@ -289,7 +289,7 @@ describe('Scheduler - 指数退避', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [], applyMode: "immediate", stagingDir: "",
+      ignoreItems: [], applyMode: "immediate", stagingDir: "", executablePath: "",
       backupDir: '',
     };
     const sch = new Scheduler({ config: cfg, indexCachePath });

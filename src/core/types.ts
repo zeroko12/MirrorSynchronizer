@@ -62,6 +62,23 @@ export interface SyncResult {
   backupCreated: boolean;
   /** staging 模式下,写到 stagingDir 等 swap 的文件数。immediate 模式恒为 0 */
   pendingApplyCount?: number;
+  /**
+   * 同步后目标可执行文件的状态(只在 executablePath 配置时填)
+   * - 'success': 成功落到 target/(会被启动)
+   * - 'blocked': 被锁,EBUSY 跳过(不会启动)
+   * - 'skipped': 不在 sync 范围(ignoreItems 命中 / 文件不存在)
+   */
+  executableUpdate?: 'success' | 'blocked' | 'skipped';
+  /**
+   * 同步前检测到的目标可执行文件锁状态(只在 executablePath 配置时填)
+   * - true:  同步前目标程序在占用
+   * - false: 没锁
+   */
+  executableLocked?: boolean;
+  /**
+   * 启动后的 PID(只有 success 时填,启动失败没值)
+   */
+  launchedPid?: number;
 }
 
 /** 调度器状态 */
@@ -143,6 +160,19 @@ export interface AppConfig {
    * 类似 backupDir 的处理方式。不允许 == targetDir(否则跟镜像逻辑冲突)。
    */
   stagingDir: string;
+  /**
+   * 同步真正完成后自动启动的目标可执行文件(相对 target 根)。
+   * 空字符串 = 不启动(默认)。
+   * 例:"Game/MyGame.exe"
+   *
+   * 启动时机:
+   * - immediate 模式:sync 完成后
+   * - staging 模式:swap 完成后(不是 staging sync 完成后)
+   *
+   * 文件被目标程序占着时,启动会被跳过,UI 会提示"X.exe 未替换"。
+   * 远程 trigger (onRemoteRunNow) 不会启动(传 skipLaunch)。
+   */
+  executablePath: string;
   /**
    * 远程服务器(同 LAN 浏览器访问,只读 + 弹窗决策)
    * v0.1:仅暴露状态/历史/备份,允许远程确认弹窗;远程编辑 config 在 v0.2

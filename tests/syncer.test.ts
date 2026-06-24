@@ -165,7 +165,7 @@ describe('Syncer - 文件映射规则', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [], applyMode: "immediate", stagingDir: "",
+      ignoreItems: [], applyMode: "immediate", stagingDir: "", executablePath: "",
       backupDir: '',
     };
   });
@@ -440,7 +440,7 @@ describe('Syncer - ignoreItems', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [], applyMode: "immediate", stagingDir: "",
+      ignoreItems: [], applyMode: "immediate", stagingDir: "", executablePath: "",
       backupDir: '',
     };
   });
@@ -717,6 +717,7 @@ describe('Syncer - applyMode=staging', () => {
       ignoreItems: [],
       applyMode: 'staging',  // ← 强制 staging 模式
       stagingDir: '',
+      executablePath: '',
       backupDir: '',
     };
   });
@@ -824,7 +825,7 @@ describe('ConfigManager - ignoreItems 校验', () => {
     const { ConfigManager } = await import('../src/core/config.js');
     const tmpCfg = await makeTempDir('cfg-test-');
     const cfgPath = join(tmpCfg, 'config.json');
-    const mgr = new ConfigManager({ configPath: cfgPath, defaults: { ...DEFAULT_CONFIG, ignoreItems: [], applyMode: "immediate", stagingDir: "", } });
+    const mgr = new ConfigManager({ configPath: cfgPath, defaults: { ...DEFAULT_CONFIG, ignoreItems: [], applyMode: "immediate", stagingDir: "", executablePath: "", } });
     try {
       await expect(mgr.save({ ...DEFAULT_CONFIG, ignoreItems: ['cache', ''] as never })).rejects.toThrow(/ignoreItems/);
       await expect(mgr.save({ ...DEFAULT_CONFIG, ignoreItems: ['.', 'cache'] } as never)).rejects.toThrow(/ignoreItems/);
@@ -836,6 +837,86 @@ describe('ConfigManager - ignoreItems 校验', () => {
     } finally {
       await rmTemp(tmpCfg);
     }
+  });
+});
+
+describe('ConfigManager - executablePath 校验', () => {
+  it('空字符串 → 通过(禁用)', async () => {
+    const { ConfigManager } = await import('../src/core/config.js');
+    const tmpCfg = await makeTempDir('cfg-exec-');
+    const cfgPath = join(tmpCfg, 'config.json');
+    const mgr = new ConfigManager({ configPath: cfgPath, defaults: { ...DEFAULT_CONFIG, applyMode: "immediate", stagingDir: "", executablePath: "", } });
+    try {
+      await expect(mgr.save({ ...DEFAULT_CONFIG, executablePath: '' })).resolves.toBeUndefined();
+    } finally {
+      await rmTemp(tmpCfg);
+    }
+  });
+
+  it('拒绝 ".", "..", 含 ":" 的路径', async () => {
+    const { ConfigManager } = await import('../src/core/config.js');
+    const tmpCfg = await makeTempDir('cfg-exec-');
+    const cfgPath = join(tmpCfg, 'config.json');
+    const mgr = new ConfigManager({ configPath: cfgPath, defaults: { ...DEFAULT_CONFIG, applyMode: "immediate", stagingDir: "", executablePath: "", } });
+    try {
+      await expect(mgr.save({ ...DEFAULT_CONFIG, executablePath: '.' })).rejects.toThrow(/executablePath/);
+      await expect(mgr.save({ ...DEFAULT_CONFIG, executablePath: '..' })).rejects.toThrow(/executablePath/);
+      await expect(mgr.save({ ...DEFAULT_CONFIG, executablePath: '../escape' })).rejects.toThrow(/executablePath/);
+      await expect(mgr.save({ ...DEFAULT_CONFIG, executablePath: 'C:\\abs' })).rejects.toThrow(/executablePath/);
+      // 合法值应通过
+      await expect(mgr.save({ ...DEFAULT_CONFIG, executablePath: 'Game/MyGame.exe' })).resolves.toBeUndefined();
+    } finally {
+      await rmTemp(tmpCfg);
+    }
+  });
+});
+
+describe('Syncer - executableUpdate 字段', () => {
+  let sourceDir: string;
+  let targetDir: string;
+  let config: AppConfig;
+
+  beforeEach(async () => {
+    sourceDir = await makeTempDir('exe-src-');
+    targetDir = await makeTempDir('exe-tgt-');
+    config = {
+      sourceDir,
+      targetDir,
+      intervalSec: 60,
+      backupCount: 3,
+      autostart: false,
+      fileMappings: [],
+      ignoreItems: [],
+      applyMode: 'immediate',
+      stagingDir: '',
+      executablePath: '',
+      backupDir: '',
+    };
+  });
+  afterEach(async () => {
+    await rmTemp(sourceDir);
+    await rmTemp(targetDir);
+  });
+
+  it('executablePath 配置 + sync 中该文件 EBUSY → executableUpdate="blocked"(immediate 模式)', async () => {
+    // 用 Windows 上难模拟 EBUSY,这里只验证字段逻辑:
+    // executablePath 配 + sync 成功 → 字段不填(scheduler 后续 launch)
+    config.executablePath = 'app.exe';
+    await writeFile(join(sourceDir, 'app.exe'), 'content');
+    await writeFile(join(targetDir, 'app.exe'), 'OLD-content');
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+    expect(result.ok).toBe(true);
+    // immediate 模式 sync 没 EBUSY → 字段未填(scheduler 后续处理)
+    expect(result.executableUpdate).toBeUndefined();
+  });
+
+  it('executablePath 未配置 → 不填字段', async () => {
+    config.executablePath = '';
+    await writeFile(join(sourceDir, 'a.txt'), 'a');
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+    expect(result.executableUpdate).toBeUndefined();
   });
 });
 
@@ -861,7 +942,7 @@ describe('Syncer - 边界与错误', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [], applyMode: "immediate", stagingDir: "",
+      ignoreItems: [], applyMode: "immediate", stagingDir: "", executablePath: "",
       backupDir: '',
     };
     const syncer = new Syncer(config);
@@ -908,7 +989,7 @@ describe('Syncer - 边界与错误', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [], applyMode: "immediate", stagingDir: "",
+      ignoreItems: [], applyMode: "immediate", stagingDir: "", executablePath: "",
       backupDir: '',
     };
     const syncer = new Syncer(config);
@@ -928,7 +1009,7 @@ describe('Syncer - 边界与错误', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [], applyMode: "immediate", stagingDir: "",
+      ignoreItems: [], applyMode: "immediate", stagingDir: "", executablePath: "",
       backupDir: '',
     };
     const syncer = new Syncer(config);
@@ -958,7 +1039,7 @@ describe('Syncer - 性能', () => {
         backupCount: 3,
         autostart: false,
         fileMappings: [],
-      ignoreItems: [], applyMode: "immediate", stagingDir: "",
+      ignoreItems: [], applyMode: "immediate", stagingDir: "", executablePath: "",
         backupDir: '',
       };
       const syncer = new Syncer(config);

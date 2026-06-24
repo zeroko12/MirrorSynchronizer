@@ -64,7 +64,7 @@ describe('applyMapping - 远程 HTTP 源', () => {
       backupCount: 3,
       autostart: false,
       fileMappings: [],
-      ignoreItems: [], applyMode: "immediate", stagingDir: "",
+      ignoreItems: [], applyMode: "immediate", stagingDir: "", executablePath: "",
       backupDir: '',
     };
   });
