@@ -55,18 +55,12 @@ jobs:
             label: windows-x64
             script: build:win
             artifact: auto-updater-windows-x64
-            artifact_glob: 'release/*.exe'
           # macOS Apple Silicon (M1/M2/M3/M4)
-          # 不要 mac-arm64/AppName.app/ 整个 bundle,只要顶层 dmg + zip
-          # 注意:upload-artifact@v4 不支持 brace expansion `*.{dmg,zip}`,
-          # 用多行 path 每行一个 glob
+          # 顶层 dmg + zip,不要 mac-arm64/AppName.app/ 整个 bundle
           - os: macos-14
             label: macos-arm64
             script: build:mac:arm64
             artifact: auto-updater-macos-arm64
-            artifact_glob: |
-              release/*.dmg
-              release/*.zip
           # macOS Intel x64 — 用 M1 runner (macos-14) 交叉编译
           # GitHub 的 macos-13 Intel runner pool 缩水、排队严重;借 Rosetta 出 x64 dmg 更快
           # electron-builder 在 arm64 host 上 build --x64 走 Rosetta,Apple 官方支持
@@ -74,22 +68,17 @@ jobs:
             label: macos-x64
             script: build:mac:x64
             artifact: auto-updater-macos-x64
-            artifact_glob: |
-              release/*.dmg
-              release/*.zip
           # Linux x64 AppImage(只要顶层 *.AppImage,不要 linux-unpacked/)
           - os: ubuntu-latest
             label: linux-x64
             script: build:linux
             artifact: auto-updater-linux-x64
-            artifact_glob: 'release/*.AppImage'
           # Linux ARM64 AppImage(树莓派 / ARM 服务器 / Graviton)
           # ubuntu-22.04-arm 是 GitHub-hosted ARM64 runner (AWS Graviton)
           - os: ubuntu-22.04-arm
             label: linux-arm64
             script: build:linux:arm64
             artifact: auto-updater-linux-arm64
-            artifact_glob: 'release/*.AppImage'
     steps:
       - uses: actions/checkout@v4
 
@@ -117,7 +106,6 @@ jobs:
       # electron-vite build(产物在 out/) + electron-builder
       # 输出统一写到 release/ 根(electron-builder 默认行为)
       # 平台间不冲突:每个矩阵 entry 跑在独立 runner 上,各自独立的 release/
-      # upload step 用矩阵专属的 glob(`release/*.exe` / `*.dmg` 等)精确匹配
       # 加 set -e + set -o pipefail 让 build 失败立刻冒泡,避免静默成功
       - name: Build installer
         env:
@@ -128,11 +116,37 @@ jobs:
           npm run ${{ matrix.script }}
         shell: bash
 
+      # 用 shell 精确列出要上传的最终安装包(避免 upload-artifact 的 glob 解析问题)
+      # 只匹配:.exe / .dmg / .zip / .AppImage
+      # 排除:.blockmap / latest*.yml / builder-debug.yml / *-unpacked/ 目录
+      # ★ 关键:输出带 `release/` 前缀的路径(相对 repo 根),不是裸文件名
+      #   upload-artifact 从 repo 根解析 path,裸文件名会找不到文件
+      - name: Enumerate release files
+        id: enumerate
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            for f in release/*.exe release/*.dmg release/*.zip release/*.AppImage; do
+              [ -e "$f" ] && echo "$f"
+            done
+          } > /tmp/release_files.txt
+          if [ ! -s /tmp/release_files.txt ]; then
+            echo "ERROR: release/ 下没有任何安装包" >&2
+            ls -la release/ || true
+            exit 1
+          fi
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          cat /tmp/release_files.txt >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "--- uploading ---"
+          cat /tmp/release_files.txt
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact_glob }}
+          path: ${{ steps.enumerate.outputs.files }}
           if-no-files-found: error
           retention-days: 14
 
@@ -150,26 +164,54 @@ jobs:
           path: dist
 
       # 各 matrix job 的 artifact 都在 dist/<artifact-name>/ 下
-      # 把所有文件拍平到 dist/ 根,GitHub Release 一并发布
+      # 拍平到 dist/ 根:每个 artifact 现在只含 1 个最终安装包(由 upload 那侧的
+      # shell ls enumerate 保证),所以拍平后 dist/ 下只有 5 个安装包,没 cruft
       - name: Flatten artifacts into dist/
         run: |
           cd dist
           find . -mindepth 2 -type f -exec mv {} . \;
           find . -mindepth 1 -type d -empty -delete
-          echo "--- release assets ---"
+          echo "--- release assets (should be exactly 5 installers) ---"
           ls -la
 
-      # 同一 tag 重跑时(workflow 修了 bug 重新触发 CI),
-      # softprops/action-gh-release 不会清掉旧的 cruft 文件,只会追加。
-      # 先删除旧 Release,保证下一次 create 是干净的。
-      - name: Delete existing release for this tag (if any)
+      # 显式列出要上传的 4 种文件类型(.exe / .dmg / .zip / .AppImage)
+      # 不用 dist/* — 防止 .blockmap / latest*.yml / builder-debug.yml 混进来
+      # ★ 输出带 `dist/` 前缀的路径(softprops 从 repo 根解析)
+      - name: Build explicit file list
+        id: files
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            for f in dist/*.exe dist/*.dmg dist/*.zip dist/*.AppImage; do
+              [ -e "$f" ] && echo "$f"
+            done
+          } > /tmp/release_files.txt
+          if [ ! -s /tmp/release_files.txt ]; then
+            echo "ERROR: dist/ 下没有任何安装包" >&2
+            ls -la dist/ || true
+            exit 1
+          fi
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          cat /tmp/release_files.txt >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "--- final release assets ---"
+          cat /tmp/release_files.txt
+          echo "--- count: $(wc -l < /tmp/release_files.txt) ---"
+
+      # softprops/action-gh-release 在 release 已存在时不会删旧 assets(只追加),
+      # 所以同一 tag 多次重跑会累积 cruft。提前显式删 release,保证这次 create 是干净的。
+      # 加 5s sleep 让 GitHub API 缓存过期(防止刚删完立刻 create 撞 422)
+      - name: Delete existing release for this tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release delete "$GITHUB_REF_NAME" --yes || true
+        run: |
+          gh release delete "$GITHUB_REF_NAME" --yes 2>/dev/null || echo "(no existing release)"
+          sleep 5
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: ${{ steps.files.outputs.files }}
           generate_release_notes: true
           draft: false
