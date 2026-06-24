@@ -72,10 +72,17 @@ export async function tryLaunchExecutable(targetDir: string, relPath: string): P
       stdio: 'ignore',
       windowsHide: false,
     });
+    // ★ 必须监听 'error':spawn 的失败(EISDIR / EACCES / ENOENT 等)
+    //   是异步通过 error 事件抛的,没有 listener 时 Node 会当成 uncaught
+    //   exception 把主进程崩掉。这里只 log,不重抛。
+    child.on('error', (err) => {
+      coreLog.error(`[launch] 子进程启动失败 ${absPath}: ${err.message}`);
+    });
     child.unref(); // 不阻塞主进程退出
     coreLog.info(`[launch] 已启动 ${absPath} (PID=${child.pid ?? '?'})`);
     return { launched: true, pid: child.pid };
   } catch (err) {
+    // 同步抛错(Windows 上路径不存在等)
     coreLog.error(`[launch] spawn 失败 ${absPath}: ${(err as Error).message}`);
     return { launched: false, reason: 'spawn-failed' };
   }
