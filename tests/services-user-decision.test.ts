@@ -70,7 +70,7 @@ describe('user-decision', () => {
   });
 
   describe('apply', () => {
-    it('apply → 关闭 dryRun,跑一次 runNow,再恢复', async () => {
+    it('apply → 关闭 dryRun,跑一次 runNow({ force: true }),再恢复', async () => {
       // 准备:source 有文件,target 空 → 跑会添加
       await writeFile(`${sourceDir}/hello.txt`, 'hi');
       const spy = vi.spyOn(scheduler!, 'runNow').mockResolvedValue({
@@ -91,8 +91,9 @@ describe('user-decision', () => {
       // 初始 dryRunMode 是 false
       expect((scheduler as Scheduler)['dryRunMode']).toBe(false);
       await handleUserDecision(stateMgr, scheduler, 'apply', 'hash-3');
-      // 验证 setDryRunMode(false) → runNow → setDryRunMode(false) 流程
+      // 验证:runNow 必须传 force=true(让等 in-flight + 让 launch 守卫启用)
       expect(spy).toHaveBeenCalledOnce();
+      expect(spy).toHaveBeenCalledWith({ force: true });
     });
 
     it('apply 在回退锁状态 → 先解锁', async () => {

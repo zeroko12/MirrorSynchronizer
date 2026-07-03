@@ -171,6 +171,7 @@ export class Scheduler {
             stagingDir,
             backupDir: this.config.backupDir || '',
             backupCount: this.config.backupCount,
+            executablePath: this.config.executablePath,
             ignoreItems: this.config.ignoreItems,
           });
           for (const w of swapResult.warnings) coreLog.warn(`[swap] ${w}`);
@@ -205,8 +206,12 @@ export class Scheduler {
         }
       }
 
-      // 3. Launch(只 success 时启动 + 不被 skipLaunch 跳过)
+      // 3. Launch(只在 user-initiated runNow(force=true)时触发)
+      //    - 周期调度不 launch:用户没主动操作,启动目标程序是误伤
+      //    - 托盘"立即检查一次"不 launch(force=false):它只是检查
+      //    - "保存并立即同步" / 远程 / 弹窗 apply 都传 force:true → 真正落盘后 launch
       if (
+        options.force &&                // 关键:只有用户主动行为才 launch
         !options.skipLaunch &&
         this.config.executablePath &&
         result &&

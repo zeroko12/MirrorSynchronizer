@@ -42,7 +42,9 @@ export async function handleUserDecision(
           log.info('[decide] 回退锁已解除');
         }
         scheduler.setDryRunMode(false);
-        const result = await scheduler.runNow();
+        // 传 force=true:让 runNow 等 in-flight 完成(用户主动 apply 不该被吞),
+        // 同时 launch 守卫会启用 → apply 成功 + 配了 executablePath 才启动
+        const result = await scheduler.runNow({ force: true });
         scheduler.setDryRunMode(state.popupEnabled);
         if (result?.ok) {
           log.info('[decide] 用户决定应用,同步成功');

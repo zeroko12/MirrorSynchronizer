@@ -208,8 +208,8 @@ describe('Scheduler', () => {
     //   step1:hasPendingApply=false → 不 swap
     //   step2:scan + write staging(pendingApplyCount=2)
     //   step2.5:★ 修复后,本次有 pending 触发 swap → staging 清空,target 收到 v2
-    //   step3:launch 启动时 target 里已是 v2
-    const r = await sch.runNow();
+    //   step3:force=true 守卫通过,launch 启动时 target 里已是 v2
+    const r = await sch.runNow({ force: true });
 
     // 两次现象:
     // - target 收到 Game.exe(v2)
@@ -228,6 +228,43 @@ describe('Scheduler', () => {
     // - 结果同步成功 + 启动成功
     expect(r?.ok).toBe(true);
     expect(r?.launchedPid).toBe(99999);
+
+    launchSpy.mockRestore();
+  });
+
+  // ★ 回归:周期调度(force=false)即使有 executablePath + sync 成功也不 launch
+  // 此前 bug:周期 dryRun 跑出 ok=true,result.executableUpdate 没设 → finalUpdate 兜底 'success' → 误 launch
+  // 守卫:step3 launch 加 options.force 守卫 → 周期调度 force=false 不进
+  it('周期调度(force=false)不 launch,即使配了 executablePath + sync 成功', async () => {
+    const launchSpy = vi.spyOn(
+      await import('../src/core/launcher.js'),
+      'tryLaunchExecutable',
+    );
+
+    const cfg: AppConfig = {
+      ...config,
+      applyMode: 'immediate',
+      executablePath: 'Game/Game.exe',
+    };
+
+    await writeTree(sourceDir, [
+      { relPath: 'Game/Game.exe', content: 'v1' },
+      { relPath: 'readme.txt', content: 'r' },
+    ]);
+
+    launchSpy.mockResolvedValue({ launched: true, pid: 88888 });
+
+    const sch = new Scheduler({ config: cfg, indexCachePath });
+
+    // 周期调度的语义:不传 force
+    const r = await sch.runNow();
+
+    // 同步确实落盘了
+    expect(existsSync(join(cfg.targetDir, 'Game', 'Game.exe'))).toBe(true);
+    expect(r?.ok).toBe(true);
+    // 但 launch 永远不该被调
+    expect(launchSpy).not.toHaveBeenCalled();
+    expect(r?.launchedPid).toBeUndefined();
 
     launchSpy.mockRestore();
   });
