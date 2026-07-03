@@ -102,6 +102,19 @@ describe('user-decision', () => {
       const state = await stateMgr.load();
       expect(state.postRollbackLock).toBeNull();
     });
+
+    // ★ 回归:apply 不再"提前"写 lastShownChangeHash
+    // 之前:handleUserDecision('apply', hash) 在调用 runNow() 之前就写 hash
+    //       → sync 真正落地后如果 fp 没变 → 已被 hash 吃掉 → 下次 sync 静默 already-shown
+    //       → 用户感受:"我点了应用但啥都没发生,下次还不弹框"
+    // 现在:apply 成功/失败都不主动写 hash,等 sync 自然推进 onSync 决定
+    it('apply 不提前写 lastShownChangeHash(避免未成功 sync 的 fp 被吃)', async () => {
+      vi.spyOn(scheduler!, 'runNow').mockResolvedValue(null);
+      await handleUserDecision(stateMgr, scheduler, 'apply', 'hash-presync');
+      const state = await stateMgr.load();
+      // 关键:还是默认 null,没有把"同步前的 hash"吃进去
+      expect(state.lastShownChangeHash).toBeNull();
+    });
   });
 
   describe('null 依赖', () => {

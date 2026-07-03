@@ -2,7 +2,7 @@
  * Scheduler 测试 - 验证间隔触发、运行锁、配置热更新、指数退避
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -77,6 +77,40 @@ describe('Scheduler', () => {
     expect(r2).toBeNull();
   });
 
+  // ★ 回归:runNow({ force: true }) 在 in-flight 时不再立刻返 null
+  // 否则场景:调度器周期跑了一半时点"保存并立即同步"→ 返 null → 看似不同步
+  it('runNow({ force: true }) 等 in-flight 完成后真同步', async () => {
+    await writeTree(sourceDir, [{ relPath: 'a.txt', content: 'a' }]);
+    const sch = new Scheduler({ config, indexCachePath });
+    // 第一次启动(还在跑)
+    const p1 = sch.runNow();
+    // 立刻发起 force
+    const p2 = sch.runNow({ force: true });
+    const [r1, r2] = await Promise.all([p1, p2]);
+    // 两个都应该返回结果(force 等了一会儿)
+    expect(r1).not.toBeNull();
+    expect(r2).not.toBeNull();
+    // force 后再次写入 source 再 force 一轮,验证 target 落盘了
+    await writeTree(sourceDir, [
+      { relPath: 'a.txt', content: 'a' },
+      { relPath: 'force-only.txt', content: 'force' },
+    ]);
+    const r3 = await sch.runNow({ force: true });
+    expect(r3!.added).toContain('force-only.txt');
+    expect(existsSync(join(targetDir, 'force-only.txt'))).toBe(true);
+  });
+
+  // ★ 回归:runNow 不带 force + in-flight → 仍然返 null(不破坏原行为)
+  it('runNow() 非 force 时 in-flight 仍返 null', async () => {
+    await writeTree(sourceDir, [{ relPath: 'a.txt', content: 'a' }]);
+    const sch = new Scheduler({ config, indexCachePath });
+    const p1 = sch.runNow();
+    const p2 = sch.runNow();
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1).not.toBeNull();
+    expect(r2).toBeNull();
+  });
+
   it('stop 后不再触发', async () => {
     await writeTree(sourceDir, [{ relPath: 'a.txt', content: 'a' }]);
     const sch = new Scheduler({
@@ -142,6 +176,60 @@ describe('Scheduler', () => {
     await sch.runNow();
     // dryRun:y.txt 算 added 但不会真拷,x.txt 算 added(target 已删)也不会真拷
     expect(existsSync(join(targetDir, 'y.txt'))).toBe(false);
+  });
+
+  // ★ 回归:staging 模式 + executablePath + runNow 触发时 staging 是空的
+  // 此前问题:swap 一直没机会跑(平时 dryRun 不写 staging),launch 直接起 target/ 里老版本
+  // 现在:runNow 走完 sync → step2.5 检测到 pending → swap → launch 启动新版本
+  it('staging 模式:runNow 完成 sync 后,launch 之前先 swap staging', async () => {
+    const launchSpy = vi.spyOn(
+      await import('../src/core/launcher.js'),
+      'tryLaunchExecutable',
+    );
+
+    const cfg: AppConfig = {
+      ...config,
+      applyMode: 'staging',
+      executablePath: 'Game/Game.exe',
+    };
+
+    // source 有 Game.exe(v2)+ 别的文件
+    await writeTree(sourceDir, [
+      { relPath: 'Game/Game.exe', content: 'v2-new' },
+      { relPath: 'readme.txt', content: 'r2' },
+    ]);
+
+    // Mock launch 防止真启动 bat/sh
+    launchSpy.mockResolvedValue({ launched: true, pid: 99999 });
+
+    const sch = new Scheduler({ config: cfg, indexCachePath });
+
+    // ★ 关键场景:第一次 runNow 没有任何 pending 在 staging 里
+    //   step1:hasPendingApply=false → 不 swap
+    //   step2:scan + write staging(pendingApplyCount=2)
+    //   step2.5:★ 修复后,本次有 pending 触发 swap → staging 清空,target 收到 v2
+    //   step3:launch 启动时 target 里已是 v2
+    const r = await sch.runNow();
+
+    // 两次现象:
+    // - target 收到 Game.exe(v2)
+    expect(existsSync(join(cfg.targetDir, 'Game', 'Game.exe'))).toBe(true);
+    const targetContent = await fs.readFile(
+      join(cfg.targetDir, 'Game', 'Game.exe'),
+      'utf-8',
+    );
+    expect(targetContent).toBe('v2-new');
+    // - staging 已清空(说明 swap 跑过)
+    const stagingDir = cfg.stagingDir || `${cfg.targetDir}-staging`;
+    const remaining = await fs.readdir(stagingDir).catch(() => []);
+    expect(remaining.filter((n) => !n.startsWith('.'))).toEqual([]);
+    // - launch 必然被调用
+    expect(launchSpy).toHaveBeenCalled();
+    // - 结果同步成功 + 启动成功
+    expect(r?.ok).toBe(true);
+    expect(r?.launchedPid).toBe(99999);
+
+    launchSpy.mockRestore();
   });
 });
 

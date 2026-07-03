@@ -125,7 +125,18 @@ export class Scheduler {
    * 用 try/finally 还原 dryRunMode,即便 runOnce 抛错也不会污染下次调度。
    */
   async runNow(options: { force?: boolean; skipLaunch?: boolean } = {}): Promise<SyncResult | null> {
-    if (this.inFlight) return null;
+    // 主动 force(保存并立即同步 / 远程 / 弹窗 apply):等 in-flight 完成再跑
+    // 否则用户场景里常见:调度器周期跑了一半时点"保存并立即同步"→ 返 null → 看似不同步
+    if (this.inFlight) {
+      if (options.force) {
+        coreLog.info('[scheduler] runNow force=true,等待 in-flight 完成');
+        while (this.inFlight) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      } else {
+        return null;
+      }
+    }
     const prevDryRun = this.dryRunMode;
     if (options.force && prevDryRun) {
       this.dryRunMode = false;
@@ -149,6 +160,8 @@ export class Scheduler {
       }
 
       // 1. staging 模式 + 有 pending → 先 swap
+      //    关键:launch 必须在 staging 真正落到 target 之后再启动可执行文件,
+      //    否则会启动"还没替换完成"的旧版本(staging 模式两段式:写到 staging → swap → launch)
       if (!this.dryRunMode && this.config.applyMode === 'staging') {
         const stagingDir = this.config.stagingDir || deriveDefaultStagingDir(this.config.targetDir);
         if (await hasPendingApply(stagingDir)) {
@@ -158,6 +171,7 @@ export class Scheduler {
             stagingDir,
             backupDir: this.config.backupDir || '',
             backupCount: this.config.backupCount,
+            ignoreItems: this.config.ignoreItems,
           });
           for (const w of swapResult.warnings) coreLog.warn(`[swap] ${w}`);
           coreLog.info(`[scheduler] swap 完成 applied=${swapResult.applied.length} blocked=${swapResult.blocked.length}`);
@@ -166,6 +180,30 @@ export class Scheduler {
 
       // 2. 常规 sync
       const result = await this.runOnce();
+
+      // 2.5 staging 模式 + 本次 sync 写了 staging 内容(force 触发时被清空的状态恢复后),
+      //     launch 之前必须确保 staging 已 swap 到 target,否则启动的还是旧文件
+      //     (dryRun 不走这条路径因为 dryRun 不写 staging)
+      if (
+        !this.dryRunMode &&
+        !swapResult &&
+        this.config.applyMode === 'staging' &&
+        this.config.executablePath
+      ) {
+        const stagingDir = this.config.stagingDir || deriveDefaultStagingDir(this.config.targetDir);
+        if (await hasPendingApply(stagingDir)) {
+          coreLog.info(`[scheduler] 本次 sync 写入了 staging,launch 前强制 swap`);
+          swapResult = await applyPending({
+            targetDir: this.config.targetDir,
+            stagingDir,
+            backupDir: this.config.backupDir || '',
+            backupCount: this.config.backupCount,
+            executablePath: this.config.executablePath,
+            ignoreItems: this.config.ignoreItems,
+          });
+          for (const w of swapResult.warnings) coreLog.warn(`[swap] ${w}`);
+        }
+      }
 
       // 3. Launch(只 success 时启动 + 不被 skipLaunch 跳过)
       if (
