@@ -41,6 +41,8 @@ export interface SwapOptions {
   backupCount: number;
   /** 目标可执行文件(相对 targetDir),用于跟踪它的 update 状态 */
   executablePath?: string;
+  /** 备份时跳过的文件/目录(相对 targetDir,prefix 匹配) */
+  ignoreItems?: string[];
 }
 
 export interface SwapResult {
@@ -378,7 +380,9 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
       try {
         const tgtStat = await fs.stat(targetDir);
         if (tgtStat.isDirectory()) {
-          const snap = await backupper.createSnapshot(targetDir, backupDir || undefined);
+          const snap = await backupper.createSnapshot(targetDir, backupDir || undefined, {
+            ignoreItems: opts.ignoreItems,
+          });
           result.backupSnapshotPath = snap.path;
           coreLog.info(`[swap] backup created: ${snap.path}`);
           // 轮转

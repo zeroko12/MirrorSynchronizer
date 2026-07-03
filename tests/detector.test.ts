@@ -81,7 +81,7 @@ describe('decide', () => {
     if (d.kind === 'silent') expect(d.reason).toBe('no-changes');
   });
 
-  it('有变化 + popup 开启 + 无上次记录 → popup:new-changes', () => {
+  it('有变化 + popup 开启 → popup:new-changes', () => {
     const d = decide({
       ...baseInput,
       result: makeResult({ added: ['new.txt'] }),
@@ -99,27 +99,27 @@ describe('decide', () => {
     if (d.kind === 'silent') expect(d.reason).toBe('popup-disabled');
   });
 
-  it('有变化 + 暂休中 → silent:snoozed', () => {
-    const d = decide({
-      ...baseInput,
-      now: 1000,
-      snoozeUntil: 5000, // 5 秒后才解暂休
-      result: makeResult({ added: ['new.txt'] }),
-    });
-    expect(d.kind).toBe('silent');
-    if (d.kind === 'silent') expect(d.reason).toBe('snoozed');
-  });
-
-  it('有变化 + hash 已展示过 → silent:already-shown', () => {
-    // 直接用真实算出的 hash
+  it('★ 有变化 + 上次已展示(同 hash)→ 仍弹(不再 dedup)', () => {
+    // 之前的版本会返回 silent:already-shown,导致"用户感知不到还在变化"。
+    // 用户要求:探测到变化就要弹,不再 dedup。
     const realFp = computeFingerprint(makeResult({ added: ['new.txt'] }));
     const d = decide({
       ...baseInput,
       lastShownChangeHash: realFp.hash,
       result: makeResult({ added: ['new.txt'] }),
     });
-    expect(d.kind).toBe('silent');
-    if (d.kind === 'silent') expect(d.reason).toBe('already-shown');
+    expect(d.kind).toBe('popup');
+  });
+
+  it('★ 有变化 + 暂休中 → 仍弹(不再 snooze 抑制)', () => {
+    // 之前会返回 silent:snoozed。现在每次探测都弹。
+    const d = decide({
+      ...baseInput,
+      now: 1000,
+      snoozeUntil: 5000,
+      result: makeResult({ added: ['new.txt'] }),
+    });
+    expect(d.kind).toBe('popup');
   });
 
   it('有变化 + 锁定状态 → locked-detect', () => {
@@ -137,16 +137,5 @@ describe('decide', () => {
       isPostRollbackLockActive: true,
     });
     expect(d.kind).toBe('silent');
-  });
-
-  it('有变化 + 暂休已过 + popup 开启 + 新 hash → popup', () => {
-    const d = decide({
-      ...baseInput,
-      now: 10000,
-      snoozeUntil: 5000, // 已过
-      lastShownChangeHash: 'old-hash',
-      result: makeResult({ added: ['fresh.txt'] }),
-    });
-    expect(d.kind).toBe('popup');
   });
 });

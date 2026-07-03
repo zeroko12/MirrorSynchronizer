@@ -663,7 +663,7 @@ describe('Syncer - ignoreItems 工具函数', () => {
   });
 
   it('isInIgnoredItem 匹配规则(prefix-only)', async () => {
-    const { isInIgnoredItem } = await import('../src/core/syncer.js');
+    const { isInIgnoredItem } = await import('../src/core/types.js');
 
     // 目录项:精确 / 直接子 / 任意深度子
     expect(isInIgnoredItem('cache', ['cache'])).toBe(true);          // 自身

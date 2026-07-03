@@ -23,7 +23,7 @@ import { dirname, join, sep } from 'node:path';
 import { Indexer, type ScanResult } from './indexer.js';
 import { Backupper } from './backupper.js';
 import { coreLog } from './logger.js';
-import { deriveDefaultBackupDir, deriveDefaultStagingDir, type AppConfig, type FileEntry, type FileMapping, type SyncResult } from './types.js';
+import { deriveDefaultBackupDir, deriveDefaultStagingDir, isInIgnoredItem, type AppConfig, type FileEntry, type FileMapping, type SyncResult } from './types.js';
 import {
   classifyErrno,
   classifyFetchError,
@@ -81,21 +81,11 @@ export function buildIgnoreItems(ignoreItems: string[] | undefined): string[] {
 
 /**
  * 判断 relPath 是否被 ignoreItems 任何一项命中。
- *
- * 匹配规则(prefix):
- * - relPath === item                → 精确匹配(单文件 / 精确路径)
- * - relPath.startsWith(item + '/')  → 在 item 目录下(目录项,任意深度)
- *
- * 不会"跨位置"匹配:`cache` 只匹配 `cache/...`,不会匹配 `subdir/cache/...`
- * 也不会前缀相似匹配:`cache` 不会匹配 `cachefile.txt`(`cache` + `/` 检查不通过)
+ * @deprecated 实现已搬到 ./types.js,这里保留空函数占位防止旧代码引用
+ * 真正实现见 types.js 中的 isInIgnoredItem
  */
-export function isInIgnoredItem(relPath: string, items: readonly string[]): boolean {
-  if (items.length === 0) return false;
-  for (const item of items) {
-    if (relPath === item || relPath.startsWith(item + '/')) return true;
-  }
-  return false;
-}
+// 已移到 types.js,旧引用点(swappera/backup)改 import types.js
+// 这里保留注释便于历史 grep
 
 /**
  * 把映射规则的 targetRelpath 解析成实际写到 target 的相对路径。
@@ -354,7 +344,9 @@ export class Syncer {
     ) {
       try {
         const backupper = new Backupper();
-        const snap = await backupper.createSnapshot(targetDir, this.config.backupDir || undefined);
+        const snap = await backupper.createSnapshot(targetDir, this.config.backupDir || undefined, {
+          ignoreItems: this.config.ignoreItems,
+        });
         result.backupSnapshotPath = snap.path;
         result.backupCreated = true;
         // 轮转:保留 N 个(从 config 读)

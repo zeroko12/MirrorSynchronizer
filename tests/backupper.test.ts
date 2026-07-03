@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Backupper, formatTimestamp, statDir } from '../src/core/backupper.js';
 import { makeTempDir, rmTemp, writeTree, writeFile } from './helpers.js';
@@ -131,6 +132,119 @@ describe('Backupper', () => {
     expect((await bk.list(backupDir)).length).toBe(1);
     await bk.deleteSnapshot(snap.path);
     expect((await bk.list(backupDir)).length).toBe(0);
+  });
+
+  describe('ignoreItems 支持', () => {
+    it('createSnapshot 跳过 ignoreItems 命中的文件/目录', async () => {
+      await writeTree(target, [
+        { relPath: 'a.txt', content: 'a' },
+        { relPath: 'cache/1.dat', content: 'cache-1' },
+        { relPath: 'cache/sub/2.dat', content: 'cache-2' },
+        { relPath: 'config/local.ini', content: 'local' },
+        { relPath: 'b.txt', content: 'b' },
+      ]);
+      const snap = await bk.createSnapshot(target, backupDir, {
+        ignoreItems: ['cache', 'config/local.ini'],
+      });
+      // 快照里应只有 a.txt 和 b.txt(以及 .meta.json)
+      const files = await fs.readdir(snap.path);
+      const normalFiles = files.filter((f) => f !== '.meta.json').sort();
+      expect(normalFiles).toEqual(['a.txt', 'b.txt']);
+      // fileCount 应是 2(不包含被忽略的)
+      expect(snap.fileCount).toBe(2);
+      // .meta.json 记录了 ignoreItems
+      const meta = await bk.readMeta(snap.path);
+      expect(meta?.ignoreItems).toEqual(['cache', 'config/local.ini']);
+    });
+
+    it('createSnapshot 空 ignoreItems → 全量备份(向后兼容)', async () => {
+      await writeTree(target, [
+        { relPath: 'a.txt', content: 'a' },
+        { relPath: 'cache/x.dat', content: 'x' },
+      ]);
+      const snap = await bk.createSnapshot(target, backupDir, { ignoreItems: [] });
+      const files = (await fs.readdir(snap.path)).filter((f) => f !== '.meta.json').sort();
+      expect(files).toEqual(['a.txt', 'cache']);
+      expect(snap.fileCount).toBe(2);
+    });
+
+    it('rollback 三向:target 里的 ignoreItems 文件被保留', async () => {
+      // 备份时 cache/ 不存在(target 里也没)
+      await writeTree(target, [{ relPath: 'a.txt', content: 'a' }]);
+      const snap = await bk.createSnapshot(target, backupDir, {
+        ignoreItems: ['cache'],
+      });
+
+      // 改 target:加 a 的新版本 + 用户私有的 cache/2.dat
+      await writeFile(join(target, 'a.txt'), 'a-modified');
+      await writeFile(join(target, 'cache/2.dat'), 'USER-CACHE');
+      expect((await fs.readdir(target)).sort()).toEqual(['a.txt', 'cache']);
+
+      // 回退
+      await bk.rollback(snap.path, target, { fallbackIgnoreItems: ['cache'] });
+
+      // a.txt 应被回退
+      expect(await fs.readFile(join(target, 'a.txt'), 'utf-8')).toBe('a');
+      // cache/2.dat 应被**保留**(用户私有的内容)
+      expect(await fs.readFile(join(target, 'cache/2.dat'), 'utf-8')).toBe('USER-CACHE');
+    });
+
+    it('rollback:快照有 + 不在 ignoreItems → 拷到 target', async () => {
+      await writeTree(target, [
+        { relPath: 'keep.txt', content: 'keep' },
+        { relPath: 'cache/x.dat', content: 'cache' },
+      ]);
+      const snap = await bk.createSnapshot(target, backupDir, { ignoreItems: ['cache'] });
+      // target 里删掉 keep.txt
+      await fs.unlink(join(target, 'keep.txt'));
+
+      await bk.rollback(snap.path, target, { fallbackIgnoreItems: ['cache'] });
+
+      // keep.txt 应被恢复
+      expect(await fs.readFile(join(target, 'keep.txt'), 'utf-8')).toBe('keep');
+    });
+
+    it('rollback:用快照自带的 ignoreItems(回退到 ignoreItems 改之前的快照)', async () => {
+      // 备份时 ignoreItems = ['cache']
+      await writeTree(target, [
+        { relPath: 'a.txt', content: 'a' },
+        { relPath: 'cache/x.dat', content: 'old-cache' },
+      ]);
+      const snap = await bk.createSnapshot(target, backupDir, { ignoreItems: ['cache'] });
+
+      // 改 target(模拟用户之后改了 config,加 'logs' 到 ignoreItems)
+      await writeFile(join(target, 'a.txt'), 'a-new');
+      await writeFile(join(target, 'cache/y.dat'), 'new-cache-by-user');
+      await writeFile(join(target, 'logs/app.log'), 'user-logs');
+
+      // 回退时 config 已变(ignoreItems = ['cache', 'logs']),
+      // 但快照自带 ignoreItems = ['cache'],应该用快照的
+      await bk.rollback(snap.path, target, { fallbackIgnoreItems: ['cache', 'logs'] });
+
+      // 快照里的 cache 内容恢复
+      expect(await fs.readFile(join(target, 'cache/x.dat'), 'utf-8')).toBe('old-cache');
+      // 用户之后加的 cache/y.dat 因为在 ignoreItems 里 → 保留
+      expect(await fs.readFile(join(target, 'cache/y.dat'), 'utf-8')).toBe('new-cache-by-user');
+      // 用户后加的 logs/app.log 在当前 config 的 ignoreItems 里,
+      // 但快照里没有,不在快照的 ignoreItems 里 → 应当被回退删除
+      // (回退用快照的 ignoreItems,快照的 ['cache'] 不含 'logs')
+      expect(existsSync(join(target, 'logs/app.log'))).toBe(false);
+    });
+
+    it('rollback:快照无 .meta.json(老快照)→ 用 fallbackIgnoreItems', async () => {
+      // 模拟老快照:创建一个没有 .meta.json 的目录
+      const oldSnap = join(backupDir, '2020-01-01T00-00-00-000Z');
+      await fs.mkdir(oldSnap, {recursive: true});
+      await writeFile(join(oldSnap, 'a.txt'), 'old-a');
+
+      await writeFile(join(target, 'a.txt'), 'new-a');
+      await writeFile(join(target, 'cache/x.dat'), 'user-cache');
+
+      await bk.rollback(oldSnap, target, { fallbackIgnoreItems: ['cache'] });
+
+      expect(await fs.readFile(join(target, 'a.txt'), 'utf-8')).toBe('old-a');
+      expect(await fs.readFile(join(target, 'cache/x.dat'), 'utf-8')).toBe('user-cache');
+    });
   });
 });
 

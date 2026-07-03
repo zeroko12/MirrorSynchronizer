@@ -219,6 +219,26 @@ export function deriveDefaultStagingDir(targetDir: string): string {
   return `${trimmed}-staging`;
 }
 
+/**
+ * 判断 relPath 是否在 ignoreItems 任何一条命中的位置下。
+ *
+ * 匹配规则(prefix-only):
+ * - relPath === item                → 精确匹配(单文件 / 精确路径)
+ * - relPath.startsWith(item + '/')  → 在 item 目录下(目录项,任意深度)
+ *
+ * 不会"跨位置"匹配:`cache` 只匹配 `cache/...`,不会匹配 `subdir/cache/...`
+ * 也不会前缀相似匹配:`cache` 不会匹配 `cachefile.txt`(`cache` + `/` 检查不通过)
+ *
+ * 抽到 types.js 让 syncer / backupper / detector 等都能复用(避免循环 import)
+ */
+export function isInIgnoredItem(relPath: string, items: readonly string[]): boolean {
+  if (items.length === 0) return false;
+  for (const item of items) {
+    if (relPath === item || relPath.startsWith(item + '/')) return true;
+  }
+  return false;
+}
+
 /** ConfigManager 选项 */
 export interface ConfigManagerOptions {
   configPath: PathLike;

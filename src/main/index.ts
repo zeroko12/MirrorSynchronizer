@@ -129,6 +129,7 @@ function registerIpc(): void {
         backupDir: currentConfig.backupDir || '',
         backupCount: currentConfig.backupCount,
         executablePath: currentConfig.executablePath,
+        ignoreItems: currentConfig.ignoreItems,
       });
       // swap 完后,如果 executableUpdate === 'success',启动目标程序
       let launchedPid: number | undefined;
@@ -327,9 +328,14 @@ function registerIpc(): void {
       const safetyBackup = await backupper.createSnapshot(
         b.targetDir,
         currentConfig?.backupDir || undefined,
+        { ignoreItems: currentConfig?.ignoreItems },
       );
       log.info(`[rollback] 回退前安全快照: ${safetyBackup.path}`);
-      await backupper.rollback(b.snapshotPath, b.targetDir);
+      // 回退时 Backupper 优先读快照自带的 .meta.json(用备份时的 ignoreItems),
+      // 老快照没 meta 时 fallback 到当前 config
+      await backupper.rollback(b.snapshotPath, b.targetDir, {
+        fallbackIgnoreItems: currentConfig?.ignoreItems,
+      });
       log.info(`[rollback] 已回退到 ${b.snapshotPath}`);
       if (scheduler) {
         scheduler.updateConfig(currentConfig!);
@@ -716,6 +722,7 @@ app.whenReady().then(async () => {
           backupDir: currentConfig.backupDir || '',
           backupCount: currentConfig.backupCount,
           executablePath: currentConfig.executablePath,
+          ignoreItems: currentConfig.ignoreItems,
         });
         for (const w of r.warnings) log.warn(`[swap] ${w}`);
         log.info(`[startup] swap 完成 applied=${r.applied.length} blocked=${r.blocked.length}`);
