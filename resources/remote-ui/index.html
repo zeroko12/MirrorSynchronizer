@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>自动更新检测 · 远程</title>
-  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <!-- Vue 3 框架 vendor 到本地,避免公网 CDN 依赖(国内 LAN / 防火墙下会失败) -->
+  <script src="./vue.global.prod.js"></script>
   <style>
     :root {
       --bg: #f5f5f7;

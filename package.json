@@ -60,8 +60,14 @@
     },
     "files": [
       "out/**/*",
-      "resources/**/*",
+      "resources/icon.png",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/remote-ui",
+        "to": "remote-ui"
+      }
     ],
     "win": {
       "target": [

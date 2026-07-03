@@ -730,13 +730,27 @@ app.on('window-all-closed', async () => {
   }
 });
 
+/**
+ * 退出前 hook:等 scheduler 收尾(stop 内部会 cancel in-flight sync)
+ *
+ * 加 3s 超时保护 — 万一 scheduler.stop 卡在死锁网络 IO 上,
+ * 超时后强制放行 quit,避免用户看到"点了退出但没反应"。
+ */
 app.on('before-quit', async (e) => {
-  if (scheduler) {
-    e.preventDefault();
-    await scheduler.stop();
-    scheduler = null;
-    app.quit();
+  if (!scheduler) return; // 已经被清理过,直接放行
+  e.preventDefault();
+  try {
+    await Promise.race([
+      scheduler.stop(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('scheduler.stop 超时 3s,强制退出')), 3000),
+      ),
+    ]);
+  } catch (err) {
+    log.warn(`[main] before-quit: scheduler.stop 异常,继续退出: ${(err as Error).message}`);
   }
+  scheduler = null;
+  app.quit();
 });
 
 /* ============================ 远程访问 ============================ */

@@ -24,6 +24,15 @@ export function getMainWindow(): BrowserWindowType | null {
   return mainWindow;
 }
 
+/** 主进程在退出时设置;window 关闭按钮看到这个 flag 就不再 preventDefault,让窗口真正关 */
+let isQuitting = false;
+export function setQuitting(): void {
+  isQuitting = true;
+}
+export function isAppQuitting(): boolean {
+  return isQuitting;
+}
+
 /** 应用图标(打包前用 resources/icon.png,打包后从 app 根目录取) */
 function loadAppIcon() {
   // 开发模式:从源码 resources/ 取
@@ -70,9 +79,10 @@ export function createWindow(): void {
     return { action: 'deny' };
   });
 
-  // 关闭按钮 = 最小化到托盘(不退出),只能从托盘菜单或 app.quit 真正退出
+  // 关闭按钮 = 最小化到托盘(不退出);主进程调 app.quit() 时 setQuitting(true),
+  // 之后 close 就不 preventDefault,让窗口真的关掉
   mainWindow.on('close', (e) => {
-    if (!(app as unknown as { isQuitting?: boolean }).isQuitting) {
+    if (!isQuitting) {
       e.preventDefault();
       mainWindow?.hide();
     }

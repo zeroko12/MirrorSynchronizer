@@ -9,7 +9,7 @@ import { app, clipboard, Menu, nativeImage, shell, Tray, type Tray as TrayType }
 import { join } from 'node:path';
 import { APP_DISPLAY_NAME } from '@core/constants';
 import { mainLog } from '@core/logger';
-import { getMainWindow } from './window.js';
+import { getMainWindow, setQuitting } from './window.js';
 import { showContact } from './app-menu.js';
 import type { RemoteAccessInfo } from './remote/manager.js';
 
@@ -110,6 +110,9 @@ function rebuildMenu(): void {
     {
       label: '退出',
       click: () => {
+        // 关键:先置 isQuitting = true,这样隐藏到托盘的主窗口
+        // close handler 看到后不再 preventDefault,让窗口正常关闭 → app.quit 才会真正结束
+        setQuitting();
         app.quit();
       },
     },
