@@ -54,12 +54,10 @@ export type PopupDecision =
 
 export interface DecideInput {
   result: SyncResult;
+  lastShownChangeHash: string | null;
   popupEnabled: boolean;
+  snoozeUntil: number;
   isPostRollbackLockActive: boolean;
-  /** @deprecated 保留以兼容旧调用者,不再用于决策 */
-  lastShownChangeHash?: string | null;
-  /** @deprecated 保留以兼容旧调用者,不再用于决策 */
-  snoozeUntil?: number;
   now?: number;
 }
 
@@ -70,16 +68,21 @@ export interface DecideInput {
  * - 没变化 → 静默(没必要打扰)
  * - 弹窗关闭 → 静默(尊重用户偏好)
  * - 锁定场景 → 强制 popup-locked(让用户决定,不能直接应用)
- * - 其他所有有变化的情况 → 弹框
+ * - 暂休中 → 静默(用户主动点了"5 分钟后再问")
+ * - 跟上次弹过的 hash 一样 → 静默 already-shown
+ *   (用户点过 ignore 后,该变化不应用但也别再问;
+ *    点过 apply 后,通常没 diff 自然到 no-changes 分支,
+ *    但保留兜底以防 source 还有残留)
+ * - 其他情况 → 弹框(新 hash)
  *
- * 注意:历史版本有 snoozed / already-shown 两个 dedup 条件,
- * 会让"用户点过 ignore / apply 后,再次出现同样变化时不弹窗"。
- * 用户反馈"探测到改动都应该弹框"后,移除这两个条件 — 现在
- * 每次 sync 探测到变化都弹一次。dedup 由"用户点 ignore 时
- * 不主动 mark 变化为已读"承担(具体见 scheduler-events)。
+ * 5 种静默路径 + 1 种弹出 + 1 种锁定弹:
+ *   no-changes / popup-disabled / snoozed / already-shown
+ *   + popup(new-changes) + locked-detect
  */
 export function decide(input: DecideInput): PopupDecision {
-  const { result, popupEnabled, isPostRollbackLockActive } = input;
+  const { result, lastShownChangeHash, popupEnabled, snoozeUntil, isPostRollbackLockActive } = input;
+  const now = input.now ?? Date.now();
+
   const fp = computeFingerprint(result);
 
   // 没变化 → 静默
@@ -97,6 +100,16 @@ export function decide(input: DecideInput): PopupDecision {
     return { kind: 'silent', reason: 'popup-disabled' };
   }
 
-  // 弹!探测到任何变化都弹框
+  // 暂休中 → 静默(用户主动点了"5 分钟后再问")
+  if (now < snoozeUntil) {
+    return { kind: 'silent', reason: 'snoozed' };
+  }
+
+  // 变化集和上次展示过的一样 → 静默(用户已看过:点了 ignore 就别再问)
+  if (lastShownChangeHash === fp.hash) {
+    return { kind: 'silent', reason: 'already-shown' };
+  }
+
+  // 弹!新 hash
   return { kind: 'popup', reason: 'new-changes', fingerprint: fp };
 }

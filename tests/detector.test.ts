@@ -99,25 +99,37 @@ describe('decide', () => {
     if (d.kind === 'silent') expect(d.reason).toBe('popup-disabled');
   });
 
-  it('★ 有变化 + 上次已展示(同 hash)→ 仍弹(不再 dedup)', () => {
-    // 之前的版本会返回 silent:already-shown,导致"用户感知不到还在变化"。
-    // 用户要求:探测到变化就要弹,不再 dedup。
+  it('有变化 + 暂休中 → silent:snoozed(5 分钟内不弹同样的)', () => {
+    const d = decide({
+      ...baseInput,
+      now: 1000,
+      snoozeUntil: 5000, // 5 秒后才解暂休
+      result: makeResult({ added: ['new.txt'] }),
+    });
+    expect(d.kind).toBe('silent');
+    if (d.kind === 'silent') expect(d.reason).toBe('snoozed');
+  });
+
+  it('★ 有变化 + hash 已展示过(用户点过 ignore/applied)→ silent:already-shown(已问过,别再问)', () => {
+    // 关键 dedup:用户点过 ignore 后,变化不应用但也别再问;
+    // 用户点过 apply 后,通常已经同步没 diff,但兜底也走这条。
     const realFp = computeFingerprint(makeResult({ added: ['new.txt'] }));
     const d = decide({
       ...baseInput,
       lastShownChangeHash: realFp.hash,
       result: makeResult({ added: ['new.txt'] }),
     });
-    expect(d.kind).toBe('popup');
+    expect(d.kind).toBe('silent');
+    if (d.kind === 'silent') expect(d.reason).toBe('already-shown');
   });
 
-  it('★ 有变化 + 暂休中 → 仍弹(不再 snooze 抑制)', () => {
-    // 之前会返回 silent:snoozed。现在每次探测都弹。
+  it('★ 暂休已过 + 新 hash → 弹(再次问)', () => {
     const d = decide({
       ...baseInput,
-      now: 1000,
-      snoozeUntil: 5000,
-      result: makeResult({ added: ['new.txt'] }),
+      now: 10000,
+      snoozeUntil: 5000, // 已过
+      lastShownChangeHash: 'old-hash', // 不同 hash
+      result: makeResult({ added: ['fresh.txt'] }),
     });
     expect(d.kind).toBe('popup');
   });
