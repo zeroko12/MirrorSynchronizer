@@ -176,6 +176,108 @@ async function isSameVolume(a: string, b: string): Promise<boolean> {
 }
 
 /**
+ * 检测 PID 是否仍在运行
+ * - process.kill(pid, 0) 抛 ESRCH = 进程不存在
+ * - 抛 EPERM = 进程存在但无权限(我们同用户不会遇到)
+ * - 不抛 = 进程存在
+ */
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'EPERM'; // 存在但无权限(罕见,视为 alive)
+  }
+}
+
+/** 锁的获取结果 */
+type LockAcquireResult =
+  | { ok: true; recovered?: number } // recovered = 清掉了一个 stale lock,值是原 PID(给 log/warning)
+  | { ok: false; heldBy?: number };  // 真的有人在用
+
+/**
+ * 锁状态检查(给 clearStaging 之类的"只读"操作复用)
+ * - 'none'  : 锁文件不存在
+ * - 'stale' : 锁文件存在但 stale(PID 已死 / mtime 超时 / 内容非数字)
+ * - 'alive' : 锁文件存在且真的有人在跑
+ */
+async function isLockStale(stagingDir: string): Promise<'none' | 'stale' | 'alive'> {
+  const STALE_MTIME_MS = 10 * 60 * 1000;
+  let stat: import('node:fs').Stats;
+  try {
+    stat = await fs.stat(join(stagingDir, SWAPPING_LOCK_FILE));
+  } catch {
+    return 'none';
+  }
+  const ageMs = Date.now() - stat.mtimeMs;
+  const content = await fs.readFile(join(stagingDir, SWAPPING_LOCK_FILE), 'utf-8').catch(() => '');
+  const heldBy = parseInt(content.trim(), 10);
+  const pidDead = !isPidAlive(heldBy);
+  const tooOld = ageMs > STALE_MTIME_MS;
+  if (pidDead || tooOld) return 'stale';
+  return 'alive';
+}
+
+/**
+ * 获取 swap 互斥锁(自愈版)
+ * - 正常情况:wx 创建,返回 ok
+ * - 锁文件已存在:读 PID,检查是否还活着
+ *   - 死了(PID 不存在 / 锁文件 mtime 太久)→ 删掉,重试创建
+ *   - 活着 → 返 ok=false,heldBy=那个 PID
+ *
+ * 为什么需要自愈:之前进程如果在 create 后、finally 前崩溃(电源断 / OOM / 强杀),
+ * .swapping 文件留在盘上,下次启动会一直报"其他实例持有锁",重启电脑也没用(文件还在)。
+ */
+async function acquireSwapLock(lockPath: string): Promise<LockAcquireResult> {
+  // STALE 判定:文件 mtime 超过 10 分钟 — 真 swap 不会跑这么久,10 分钟绝对算 crash
+  const STALE_MTIME_MS = 10 * 60 * 1000;
+  let recoveredFrom: number | undefined; // 清掉的 stale lock 原 PID(给 log/warning)
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      // wx = 排他创建,文件已存在会抛 EEXIST
+      await fs.writeFile(lockPath, String(process.pid), { flag: 'wx' });
+      return recoveredFrom !== undefined
+        ? { ok: true, recovered: recoveredFrom }
+        : { ok: true };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+
+    // 文件已存在 — 判断是不是 stale
+    let stat: import('node:fs').Stats;
+    try {
+      stat = await fs.stat(lockPath);
+    } catch {
+      // 文件在 stat 之间被删了(并发)→ 下一轮 retry 创建
+      continue;
+    }
+    const ageMs = Date.now() - stat.mtimeMs;
+    const content = await fs.readFile(lockPath, 'utf-8').catch(() => '');
+    const heldBy = parseInt(content.trim(), 10);
+
+    const pidDead = !isPidAlive(heldBy);
+    const tooOld = ageMs > STALE_MTIME_MS;
+    if (pidDead || tooOld) {
+      // Stale lock — 删掉,retry 创建
+      const reason = pidDead ? `PID ${heldBy} 已退出` : `锁文件 ${Math.round(ageMs / 1000)}s 未刷新(超过 ${STALE_MTIME_MS / 1000}s)`;
+      coreLog.warn(`[swap] 检测到 stale lock: ${reason} — 清理并重试`);
+      await fs.unlink(lockPath).catch(() => undefined);
+      recoveredFrom = heldBy;
+      continue; // retry create(下次循环会返 ok + recoveredFrom)
+    }
+
+    // 真的有人在跑
+    return { ok: false, heldBy };
+  }
+
+  // 极端情况:重试两次还失败,让上层报错
+  return { ok: false };
+}
+
+/**
  * 移动 staging 下的旧版本临时目录回原 staging(供 swap 中断恢复)
  */
 async function recoverInterruptedSwap(stagingDir: string, warnings: string[]): Promise<void> {
@@ -250,17 +352,19 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
     return result;
   }
 
-  // 2. 拿 mutex
+  // 2. 拿 mutex(自愈:若锁文件是上次崩溃留下的 stale lock,先清理)
   const lockPath = join(stagingDir, SWAPPING_LOCK_FILE);
-  try {
-    await fs.writeFile(lockPath, String(process.pid), { flag: 'wx' });
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
-      result.fatalError = 'swap 正在进行中(其他实例持有锁),跳过本次';
-      result.warnings.push(result.fatalError);
-      return result;
-    }
-    throw err;
+  const lock = await acquireSwapLock(lockPath);
+  if (!lock.ok) {
+    // 真有另一个实例在跑
+    result.fatalError = `swap 正在进行中(其他实例持有锁,PID=${lock.heldBy ?? '?'}),跳过本次`;
+    result.warnings.push(result.fatalError);
+    return result;
+  }
+  if (lock.recovered) {
+    // 之前进程崩溃,留了 .swapping + 可能 .swap-staging/{ts}/
+    coreLog.warn(`[swap] 清理了崩溃进程的 stale lock (PID=${lock.recovered})`);
+    result.warnings.push(`检测到上次 swap 异常中断(PID=${lock.recovered} 已退出),已自动恢复`);
   }
 
   try {
@@ -428,12 +532,15 @@ async function pruneEmptyDirs(root: string): Promise<void> {
  */
 export async function clearStaging(opts: { stagingDir: string }): Promise<{ ok: boolean; cleared: number; error?: string }> {
   const { stagingDir } = opts;
-  // 检查 mutex:如果有 swap 在跑,不允许清空
-  try {
-    await fs.stat(join(stagingDir, SWAPPING_LOCK_FILE));
+  // 检查 mutex(自愈版:stale lock 自动清理,只有真活着才拒绝)
+  const lockCheck = await isLockStale(stagingDir);
+  if (lockCheck === 'alive') {
     return { ok: false, cleared: 0, error: 'swap 进行中,无法清空' };
-  } catch {
-    // lock 不存在 = 没人用
+  }
+  if (lockCheck === 'stale') {
+    // 死锁残留,直接清掉
+    await fs.unlink(join(stagingDir, SWAPPING_LOCK_FILE)).catch(() => undefined);
+    coreLog.warn('[clearStaging] 清理了 stale .swapping lock');
   }
 
   // 列出所有文件,删除

@@ -155,19 +155,52 @@ describe('Swapper - 部分成功 + 锁模拟', () => {
     await rmTemp(backupDir);
   });
 
-  it('mutex:另一个 swap 在跑 → fatalError 提示不重试', async () => {
+  it('mutex:另一个 swap 在跑(PID 活着) → fatalError 提示不重试', async () => {
     await writeTree(stagingDir, [
       { relPath: '.pending-apply', content: '' },
       { relPath: 'a.txt', content: 'a' },
     ]);
-    // 模拟另一个 swap 持有锁
-    await fs.writeFile(join(stagingDir, '.swapping'), 'fake-pid');
+    // 模拟另一个 swap 持有锁:用当前进程 PID(一定活着)
+    await fs.writeFile(join(stagingDir, '.swapping'), String(process.pid));
 
     const r = await applyPending({
       targetDir, stagingDir, backupDir, backupCount: 3,
     });
     expect(r.ok).toBe(false);
     expect(r.fatalError).toMatch(/进行中/);
+
+    // cleanup:删掉手动放的锁,免得影响其它 test
+    await fs.unlink(join(stagingDir, '.swapping')).catch(() => undefined);
+  });
+
+  it('mutex 自愈:上次崩溃留下的 stale lock(PID 已死)→ 自动清理 + 成功', async () => {
+    await writeTree(stagingDir, [
+      { relPath: '.pending-apply', content: '' },
+      { relPath: 'a.txt', content: 'a' },
+    ]);
+    // 模拟上次崩溃:用不存在的 PID + 旧 mtime
+    // 用一个非常大的 PID(几乎肯定不存在)
+    await fs.writeFile(join(stagingDir, '.swapping'), '999999');
+
+    const r = await applyPending({
+      targetDir, stagingDir, backupDir, backupCount: 3,
+    });
+    expect(r.ok).toBe(true);
+    // 应该有 warning 说明恢复了 stale lock
+    expect(r.warnings.some((w) => w.includes('stale') || w.includes('自动恢复'))).toBe(true);
+  });
+
+  it('mutex 自愈:无效 PID(non-numeric) → 当 stale 处理', async () => {
+    await writeTree(stagingDir, [
+      { relPath: '.pending-apply', content: '' },
+      { relPath: 'a.txt', content: 'a' },
+    ]);
+    await fs.writeFile(join(stagingDir, '.swapping'), 'fake-pid-not-a-number');
+
+    const r = await applyPending({
+      targetDir, stagingDir, backupDir, backupCount: 3,
+    });
+    expect(r.ok).toBe(true);
   });
 
   it('cross-disk fallback:目标目录不存在 → 创建后写入', async () => {
@@ -210,12 +243,26 @@ describe('Swapper - clearStaging', () => {
     expect(remaining).toEqual([]);
   });
 
-  it('mutex 持有时 → 拒绝', async () => {
+  it('mutex 持有时(PID 活着) → 拒绝', async () => {
     await writeFile(join(stagingDir, 'a.txt'), 'a');
-    await fs.writeFile(join(stagingDir, '.swapping'), 'fake-pid');
+    // 用当前进程 PID(一定活着)
+    await fs.writeFile(join(stagingDir, '.swapping'), String(process.pid));
     const r = await clearStaging({ stagingDir });
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/进行中/);
+    // cleanup
+    await fs.unlink(join(stagingDir, '.swapping')).catch(() => undefined);
+  });
+
+  it('mutex 自愈:stale lock → 自动清掉,正常 clear', async () => {
+    await writeFile(join(stagingDir, 'a.txt'), 'a');
+    await fs.writeFile(join(stagingDir, '.swapping'), '999999'); // 不存在的 PID
+    const r = await clearStaging({ stagingDir });
+    expect(r.ok).toBe(true);
+    expect(r.cleared).toBe(1);
+    // 锁文件被清掉
+    const remaining = await fs.readdir(stagingDir);
+    expect(remaining).toEqual([]);
   });
 });
 
