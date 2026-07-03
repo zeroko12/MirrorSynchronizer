@@ -161,13 +161,28 @@ export async function startRemoteServer(deps: ServerDeps): Promise<RemoteServerH
       })();
     } else if (msg.type === 'run-sync') {
       // 远程手动触发同步
+      // 加 90s 上限:runNow 包含 preflight + sync + launch,SMB/网络源卡住时会拖很久
+      // 超时后仍然发 ack(失败状态),让 web 端不卡转圈
+      const SYNC_TIMEOUT_MS = 90_000;
       void (async () => {
-        const result = await Promise.resolve(deps.onRemoteRunNow());
-        log.info('[server] remote run-sync done');
+        let ok = true;
+        try {
+          const result = await Promise.race([
+            Promise.resolve(deps.onRemoteRunNow()),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error(`remote run-sync 超时 ${SYNC_TIMEOUT_MS / 1000}s`)), SYNC_TIMEOUT_MS),
+            ),
+          ]);
+          log.info('[server] remote run-sync done');
+          ok = result != null;
+        } catch (err) {
+          log.error(`[server] remote run-sync 失败: ${(err as Error).message}`);
+          ok = false;
+        }
         if (client.ws.readyState === client.ws.OPEN) {
           client.ws.send(JSON.stringify({
             type: 'run-sync-ack',
-            ok: result != null,
+            ok,
           }));
         }
       })();
@@ -219,7 +234,15 @@ async function closeRemoteServer(
 
 /** UI 静态文件目录 */
 function resolveUiDir(): string {
-  // 从 server.ts 位置向上找项目根(找 package.json)
+  // 1. 打包后:electron-builder 把 resources/ 拷到 process.resourcesPath
+  //    (Linux/Win:/usr/lib/auto-updater/resources/;macOS:Auto Updater.app/Contents/Resources/)
+  //    我们需要的是 <resources>/remote-ui/
+  const resPath = process.resourcesPath;
+  if (resPath) {
+    const candidate = join(resPath, 'remote-ui');
+    if (existsSync(candidate)) return candidate;
+  }
+  // 2. 开发期:从 server.ts 位置向上找项目根(找 package.json)
   let dir = dirname(fileURLToPath(import.meta.url));
   while (dir !== dirname(dir)) {
     if (existsSync(join(dir, 'package.json'))) {
@@ -228,7 +251,7 @@ function resolveUiDir(): string {
     }
     dir = dirname(dir);
   }
-  // 兜底:当前工作目录
+  // 3. 兜底:当前工作目录
   return join(process.cwd(), 'resources', 'remote-ui');
 }
 

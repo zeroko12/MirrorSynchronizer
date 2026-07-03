@@ -396,8 +396,7 @@
             // 同步 pendingPopup
             popup.value = msg.data.pendingPopup;
           } else if (msg.type === 'sync-result') {
-            // 立即同步完成 — 提取结果用于按钮反馈
-            triggering.value = false;
+            // 任何 sync 完成后都更新历史(自动 / 手动都更新)
             if (msg.data) {
               lastSyncResult.value = {
                 ok: msg.data.ok,
@@ -407,6 +406,15 @@
                 durationMs: msg.data.durationMs ?? 0,
                 fatalReason: msg.data.fatalReason,
               };
+            }
+            // ★ 不要在这里把 triggering 翻回 false — 那是用户主动 run-sync 的反馈
+            //   自动 sync-result 不应该"误以为"用户触发的同步完成了
+            loadState();
+          } else if (msg.type === 'run-sync-ack') {
+            // 用户主动触发的"立即同步"完成 — 翻回 triggering + 拉新历史
+            triggering.value = false;
+            if (msg.ok === false) {
+              lastSyncResult.value = { ok: false, added: 0, modified: 0, deleted: 0, durationMs: 0, fatalReason: 'timeout-or-failed' };
             }
             loadState();
           } else if (msg.type === 'popup') {

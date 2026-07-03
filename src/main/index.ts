@@ -364,9 +364,27 @@ function registerIpc(): void {
   });
 
   // P4: 用户弹窗决策
+  // 加 30s 上限:handleUserDecision 内的 scheduler.runNow 可能因为 SMB / 网络源慢而拖很久
+  // (apply 路径会真同步 + 跑 launch;远端用户通过 web 触发时会更慢)
+  // 超时后放行 IPC,让渲染端的乐观关闭逻辑生效 — 不要再让用户卡在转圈
   ipcMain.handle('user:decide', async (_e, action: 'apply' | 'snooze' | 'ignore', hash: string) => {
-    await handleUserDecision(stateMgr, scheduler, action, hash);
-    return { ok: true };
+    const DECIDE_TIMEOUT_MS = 30_000;
+    try {
+      await Promise.race([
+        handleUserDecision(stateMgr, scheduler, action, hash),
+        new Promise<void>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`user:decide 超时 ${DECIDE_TIMEOUT_MS / 1000}s,sync 可能卡住`)),
+            DECIDE_TIMEOUT_MS,
+          ),
+        ),
+      ]);
+      return { ok: true };
+    } catch (err) {
+      log.error(`[user:decide] ${(err as Error).message}`);
+      // 即便超时/出错,也返回 ok 让渲染端关弹窗;真正问题由日志和 toast 体现
+      return { ok: false, error: (err as Error).message };
+    }
   });
 
   // P4: 运行时状态

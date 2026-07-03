@@ -55,6 +55,9 @@ function showPrompt(data: PromptData): void {
 async function onApply() {
   if (!promptData.value) return;
   deciding.value = true;
+  // ★ 立刻关弹窗(乐观):不等 IPC 响应。sync 在后台跑,完成后用 toast 通知。
+  //   否则 IPC 慢/挂会卡转圈,用户没法关闭。
+  show.value = false;
   try {
     const res = await getApi().$invoke('user:decide', 'apply', promptData.value.hash);
     if (res.ok) {
@@ -62,7 +65,9 @@ async function onApply() {
     } else {
       message.error(res.error ?? '操作失败');
     }
-    show.value = false;
+  } catch (err) {
+    // IPC 抛错(scheduler 卡住、网络断开、超时)— 用户至少要看到"失败"提示
+    message.error('同步请求失败: ' + ((err as Error)?.message ?? String(err)));
   } finally {
     deciding.value = false;
   }
@@ -71,19 +76,29 @@ async function onApply() {
 async function onSnooze() {
   if (!promptData.value) return;
   deciding.value = true;
-  await getApi().$invoke('user:decide', 'snooze', promptData.value.hash);
-  show.value = false;
-  message.info(snoozeLabel);
-  deciding.value = false;
+  show.value = false; // 立即关
+  try {
+    await getApi().$invoke('user:decide', 'snooze', promptData.value.hash);
+    message.info(snoozeLabel);
+  } catch (err) {
+    message.error('暂休请求失败: ' + ((err as Error)?.message ?? String(err)));
+  } finally {
+    deciding.value = false;
+  }
 }
 
 async function onIgnore() {
   if (!promptData.value) return;
   deciding.value = true;
-  await getApi().$invoke('user:decide', 'ignore', promptData.value.hash);
-  show.value = false;
-  message.info('已忽略,下次有新变化再提醒');
-  deciding.value = false;
+  show.value = false; // 立即关
+  try {
+    await getApi().$invoke('user:decide', 'ignore', promptData.value.hash);
+    message.info('已忽略,下次有新变化再提醒');
+  } catch (err) {
+    message.error('忽略请求失败: ' + ((err as Error)?.message ?? String(err)));
+  } finally {
+    deciding.value = false;
+  }
 }
 
 defineExpose({ showPrompt });
