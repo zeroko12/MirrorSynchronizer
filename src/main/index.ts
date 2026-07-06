@@ -98,19 +98,46 @@ function registerIpc(): void {
     };
   });
 
+  // 同步 IPC 30s 上限:SMB / 网络源挂死时不能让 renderer 一直转圈
+  // 超时后放行 IPC,返 ok=false + 错误信息,后台 sync 仍在跑(完成后会发 sync:result push)
+  const SYNC_IPC_TIMEOUT_MS = 30_000;
+  const syncTimeoutMessage = (op: string) =>
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`${op} 超时 ${SYNC_IPC_TIMEOUT_MS / 1000}s,sync 可能卡住(SMB 死链?)`)),
+        SYNC_IPC_TIMEOUT_MS,
+      ),
+    );
+
   ipcMain.handle('sync:runNow', async () => {
     // 保留 dryRun 语义 — 托盘"立即检查一次"、通用检查入口
     if (!scheduler) return { ok: false, error: 'scheduler not ready' };
-    const result = await scheduler.runNow();
-    return { ok: true, result };
+    try {
+      const result = await Promise.race([
+        scheduler.runNow(),
+        syncTimeoutMessage('sync:runNow'),
+      ]);
+      return { ok: true, result };
+    } catch (err) {
+      log.error(`[sync:runNow] ${(err as Error).message}`);
+      return { ok: false, error: (err as Error).message };
+    }
   });
 
   ipcMain.handle('sync:runNowForce', async () => {
     // 强制真同步 — 即便弹窗模式也真删真拷,用于"保存并立即同步"按钮
     // (语义跟本地弹窗"应用"按钮和远程"立即同步"一致:用户主动要求立刻落盘)
     if (!scheduler) return { ok: false, error: 'scheduler not ready' };
-    const result = await scheduler.runNow({ force: true });
-    return { ok: true, result };
+    try {
+      const result = await Promise.race([
+        scheduler.runNow({ force: true }),
+        syncTimeoutMessage('sync:runNowForce'),
+      ]);
+      return { ok: true, result };
+    } catch (err) {
+      log.error(`[sync:runNowForce] ${(err as Error).message}`);
+      return { ok: false, error: (err as Error).message };
+    }
   });
 
   // P6:staging 模式 — 立即应用 staging 中待 swap 的内容到 target
@@ -123,14 +150,17 @@ function registerIpc(): void {
     }
     const stagingDir = currentConfig.stagingDir || deriveDefaultStagingDir(currentConfig.targetDir);
     try {
-      const r = await applyPending({
-        targetDir: currentConfig.targetDir,
-        stagingDir,
-        backupDir: currentConfig.backupDir || '',
-        backupCount: currentConfig.backupCount,
-        executablePath: currentConfig.executablePath,
-        ignoreItems: currentConfig.ignoreItems,
-      });
+      const r = await Promise.race([
+        applyPending({
+          targetDir: currentConfig.targetDir,
+          stagingDir,
+          backupDir: currentConfig.backupDir || '',
+          backupCount: currentConfig.backupCount,
+          executablePath: currentConfig.executablePath,
+          ignoreItems: currentConfig.ignoreItems,
+        }),
+        syncTimeoutMessage('sync:applyNow'),
+      ]);
       // swap 完后,如果 executableUpdate === 'success',启动目标程序
       let launchedPid: number | undefined;
       if (currentConfig.executablePath && r.executableUpdate === 'success') {
@@ -158,6 +188,7 @@ function registerIpc(): void {
         launchedPid,
       };
     } catch (err) {
+      log.error(`[sync:applyNow] ${(err as Error).message}`);
       return { ok: false, error: (err as Error).message, applied: 0, blocked: 0, warnings: [] };
     }
   });
