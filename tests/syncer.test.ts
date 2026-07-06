@@ -824,7 +824,7 @@ describe('Syncer - applyMode=staging', () => {
   //   → staging 模式下"立即应用映射"会直接写 target,绕过文件锁保护
   //   → 目标程序正在运行时(被锁)→ copyFile EBUSY 失败/抛错
   // 修:applyMappingsOnly 算出 writeDir(staging/stagingDir 或 target)后传给 applyMapping
-  it('staging 模式 + applyMappingsOnly:映射写入 stagingDir(跟 sync() 一致)', async () => {
+  it('staging 模式 + applyMappingsOnly:映射写入 stagingDir + 标记 .pending-apply', async () => {
     config.stagingDir = stagingDir;
     await writeFile(join(localDir, 'tmpl.ini'), 'NEW-tmpl');
     config.fileMappings = [
@@ -844,6 +844,9 @@ describe('Syncer - applyMode=staging', () => {
     expect((await readTree(stagingDir)).get('config/tmpl.ini')).toBe('NEW-tmpl');
     // target 仍然空(没绕过 staging)
     expect((await readTree(targetDir)).has('config/tmpl.ini')).toBe(false);
+    // .pending-apply 标记必须存在,否则 swap 阶段(hasPendingApply)不知道有内容
+    // → 内容会卡在 staging 永远不 swap
+    await expect(fs.stat(join(stagingDir, '.pending-apply'))).resolves.toBeTruthy();
   });
 });
 

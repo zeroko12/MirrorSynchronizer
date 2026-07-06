@@ -189,6 +189,16 @@ export class Syncer {
       await this.applyMapping(mapping, targetMap, result, false, writeDir);
     }
 
+    // staging 模式 + 真写了 staging 文件 → 写 .pending-apply 标记
+    // 让 swap 阶段(hasPendingApply)知道有内容待 swap,否则内容卡在 staging
+    if (writeDir !== targetDir && result.mappingCopied.length > 0) {
+      try {
+        await fs.writeFile(join(writeDir, '.pending-apply'), '');
+      } catch (err) {
+        result.warnings.push(`写 .pending-apply 标记失败: ${(err as Error).message}`);
+      }
+    }
+
     result.ok = !result.fatalError;
     result.durationMs = Date.now() - startedAt;
     return result;
