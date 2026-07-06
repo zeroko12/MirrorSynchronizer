@@ -818,6 +818,33 @@ describe('Syncer - applyMode=staging', () => {
     expect((await readTree(targetDir)).get('a.txt')).toBe('a');
     expect((await readTree(stagingDir)).size).toBe(0); // staging 没碰
   });
+
+  // ★ 回归:applyMappingsOnly 在 staging 模式下也要写到 stagingDir
+  // 之前:applyMapping() 不传 overrideWriteDir → 写 this.config.targetDir
+  //   → staging 模式下"立即应用映射"会直接写 target,绕过文件锁保护
+  //   → 目标程序正在运行时(被锁)→ copyFile EBUSY 失败/抛错
+  // 修:applyMappingsOnly 算出 writeDir(staging/stagingDir 或 target)后传给 applyMapping
+  it('staging 模式 + applyMappingsOnly:映射写入 stagingDir(跟 sync() 一致)', async () => {
+    config.stagingDir = stagingDir;
+    await writeFile(join(localDir, 'tmpl.ini'), 'NEW-tmpl');
+    config.fileMappings = [
+      {
+        id: '1', name: 'tmpl',
+        sourcePath: join(localDir, 'tmpl.ini'),
+        targetRelpath: 'config/tmpl.ini',
+        enabled: true, overwrite: true, ifSourceMissing: 'skip',
+      },
+    ];
+    const syncer = new Syncer(config);
+    const result = await syncer.applyMappingsOnly();
+
+    expect(result.ok).toBe(true);
+    expect(result.mappingCopied).toEqual(['tmpl']);
+    // staging 有(关键断言)— 写到了 staging 而不是 target
+    expect((await readTree(stagingDir)).get('config/tmpl.ini')).toBe('NEW-tmpl');
+    // target 仍然空(没绕过 staging)
+    expect((await readTree(targetDir)).has('config/tmpl.ini')).toBe(false);
+  });
 });
 
 describe('ConfigManager - ignoreItems 校验', () => {

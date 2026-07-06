@@ -178,9 +178,15 @@ export class Syncer {
     const targetMap = new Map<string, FileEntry>();
     for (const f of targetScan.files) targetMap.set(f.relPath, f);
 
+    // staging 模式下,映射写到 stagingDir(跟 sync() 一致,避开目标文件锁),
+    // 等下次 swap 后再落 target。immediate 模式直接写 target。
+    const writeDir = this.config.applyMode === 'staging'
+      ? (this.config.stagingDir || deriveDefaultStagingDir(targetDir))
+      : targetDir;
+
     for (const mapping of fileMappings) {
       if (!mapping.enabled) continue;
-      await this.applyMapping(mapping, targetMap, result, false);
+      await this.applyMapping(mapping, targetMap, result, false, writeDir);
     }
 
     result.ok = !result.fatalError;
