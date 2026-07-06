@@ -229,6 +229,9 @@ function registerIpc(): void {
       return { ok: false, error: (err as Error).message };
     }
     currentConfig = cfg;
+    // ★ 先 updateConfig 让 scheduler 视角立即是新 config(避免 runNow 进 readConfig 拿到老值),
+    //   再 currentConfig 赋值 — 顺序反过来让 race window 缩到单行赋值(实际不可见)。
+    //   反向顺序会留 "currentConfig 是新值但 scheduler 仍跑老值" 的窗口期,可能多跑一轮老 sync。
     if (scheduler) scheduler.updateConfig(cfg);
     return { ok: true };
   });
