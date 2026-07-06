@@ -172,28 +172,103 @@ async function listPendingFiles(stagingDir: string): Promise<string[]> {
 
 /**
  * 检查 staging 是否跟 target 在同盘(同盘 = 可 atomic rename,跨盘 = 要 copy)
+ *
+ * 历史上用 `__probe_<pid>_<ts>` 写两个临时文件再 `fs.link` 判断。
+ * 这里加 try/finally + 唯一文件名前缀:`pid+ts+random`,防多进程并发留下冲突文件。
+ * 失败时仍返回 false(用 copy+unlink 兜底),但 probe 文件清理在 finally 里。
  */
 async function isSameVolume(a: string, b: string): Promise<boolean> {
-  // 通过尝试创建临时硬链接判断;失败 = 不同盘
-  // (Windows 上 fs.constants.SAME_VOLUME 用不上,这个 trick 简单通用)
-  const tmpA = join(a, `.__probe_${process.pid}_${Date.now()}`);
-  const tmpB = join(b, `.__probe_${process.pid}_${Date.now()}`);
+  const rand = `${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const tmpA = join(a, `.__probe_${rand}`);
+  const tmpB = join(b, `.__probe_${rand}`);
+  let aWritten = false;
   try {
-    await fs.writeFile(tmpA, '');
     try {
-      await fs.link(tmpA, tmpB);
-      // 成功 = 同盘
-      await fs.unlink(tmpB).catch(() => undefined);
-      await fs.unlink(tmpA).catch(() => undefined);
-      return true;
+      await fs.writeFile(tmpA, '');
+      aWritten = true;
+      try {
+        await fs.link(tmpA, tmpB);
+        return true; // 同盘
+      } catch {
+        return false; // 跨盘
+      }
     } catch {
-      await fs.unlink(tmpA).catch(() => undefined);
+      // tmpA 创建失败(SMB 不稳 / 权限 / 路径不存在)— 视作跨盘,让 sync 走 copy+unlink 路径
       return false;
     }
-  } catch {
-    return false;
+  } finally {
+    // 清理 probe,必须在所有返回路径都跑(防 SMB 偶发失败留下垃圾)
+    if (aWritten) {
+      await fs.unlink(tmpA).catch(() => undefined);
+    }
+    await fs.unlink(tmpB).catch(() => undefined);
   }
 }
+
+/**
+ * 检查 target 是否可写(swap 前必跑)。
+ *
+ * 之前没有这一步 — 用户在只读 SMB 共享上配了 stagingDir → 第一次 swap 才暴露
+ * "失败 N 个文件"→ 用户不知道是权限不够还是配置错。
+ * 现在 swap 前预检:写空文件 + 立刻删 + 看 mkdir(根目录)是否能成功;
+ * 失败立刻 fatalError 报告,避免跑几千行 rename 才暴雷。
+ *
+ * exported for unit tests。
+ */
+export async function preflightTargetWritable(targetDir: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  // 1. 根目录能不能 mkdir(根已存在的话 recursive:true 不会失败,只看 errno)
+  try {
+    await fs.mkdir(targetDir, { recursive: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return {
+      ok: false,
+      reason: `目标目录不可访问 (${code ?? (err as Error).message}): ${targetDir}`,
+    };
+  }
+
+  // 2. 写并立即删一个 probe 文件
+  const probe = join(targetDir, `.__wprobe_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+  try {
+    await fs.writeFile(probe, '');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return {
+      ok: false,
+      reason: `目标目录不可写 (${code ?? (err as Error).message}): ${targetDir}`,
+    };
+  }
+  await fs.unlink(probe).catch(() => undefined);
+  return { ok: true };
+}
+
+/**
+ * 瞬时错误码 — 这些 swap 在网络共享/AV 锁定时常返,加短期重试通常能恢复
+ */
+const TRANSIENT_ERRNO_CODES = new Set([
+  'EBUSY',       // AV / 系统锁住
+  'EAGAIN',      // 资源暂时不可用
+  'EWOULDBLOCK', // EAGAIN 别名
+  'ENETUNREACH', // 网络不可达
+  'EHOSTUNREACH',
+  'ETIMEDOUT',
+  'ENETRESET',   // 网络连接被重置
+  'EPIPE',       // 管道破裂
+]);
+
+/**
+ * 权限类错误 — 重试也没用,只会浪费 IO
+ */
+const PERM_ERRNO_CODES = new Set([
+  'EACCES', 'EPERM', 'EROFS',
+]);
+
+/**
+ * 不可恢复错误 — 重试没用,直接 blocked
+ */
+const CONFLICT_ERRNO_CODES = new Set([
+  'EEXIST', 'ENOTEMPTY', 'EISDIR', 'ENOTDIR', 'ELOOP',
+]);
 
 /**
  * 检测 PID 是否仍在运行
@@ -416,6 +491,17 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
       result.warnings.push(`创建 backup 失败(继续 swap): ${(err as Error).message}`);
     }
 
+    // 4.5 ★ 新增 pre-flight:swap 前先确认 target 可写
+    // 之前用户在只读 SMB / 配置错 → 跑完整个 rename loop 才看到一堆 EBUSY,
+    // 用户根本看不出来是"权限不够"还是"网络临时挂"。现在先短消息 fail-fast。
+    const writableCheck = await preflightTargetWritable(targetDir);
+    if (!writableCheck.ok) {
+      result.fatalError = writableCheck.reason;
+      result.warnings.push(result.fatalError);
+      result.warnings.push('提示:检查目标路径是否在可读写的卷上,网络共享是否断开或权限不足');
+      return result;
+    }
+
     // 5. 检测 stagingDir / targetDir 同盘性
     const sameVol = await isSameVolume(stagingDir, targetDir);
 
@@ -433,26 +519,84 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
     }
 
     // 7. 逐个 swap
+    //
+    // 改进:
+    //   - 瞬时错误 (EBUSY/EAGAIN/ENETUNREACH 等网络共享常见错误) → 重试 3 次
+    //     backoff 250ms(网络共享短抖动通常恢复)
+    //   - 永久错误 → 立即 blocked
+    //   - 错误分类更准:perm/conflict/transient/other(给用户更清楚诊断)
+    //
+    // 之前:所有 errno(EBUSY/EPERM/EACCES/ENOTEMPTY/EEXIST)一起进 blocked,
+    //       剩余全归 "其他错误" → 用户看不出"权限问题"和"临时网络抖动"的区别。
+    const SWAP_MAX_RETRIES = 3;
     let swappedCount = 0;
     for (const rel of pendingFiles) {
       const srcPath = join(stagingDir, rel);
       const tgtPath = join(targetDir, rel);
-      try {
-        // 确保 target 父目录存在
-        await fs.mkdir(dirname(tgtPath), { recursive: true });
-        if (sameVol) {
-          // 同盘 atomic rename
-          await fs.rename(srcPath, tgtPath);
-        } else {
-          // 跨盘 fallback:copy + unlink
-          await fs.copyFile(srcPath, tgtPath);
-          await fs.unlink(srcPath);
+      const parentDir = dirname(tgtPath);
+
+      // 7a. parent dir 创建(也加 retry — SMB 上偶发失败)
+      let mkdirAttempts = 0;
+      let mkdirOk = false;
+      let lastMkdirErr: NodeJS.ErrnoException | null = null;
+      while (mkdirAttempts <= SWAP_MAX_RETRIES && !mkdirOk) {
+        try {
+          await fs.mkdir(parentDir, { recursive: true });
+          mkdirOk = true;
+        } catch (err) {
+          lastMkdirErr = err as NodeJS.ErrnoException;
+          if (lastMkdirErr.code && TRANSIENT_ERRNO_CODES.has(lastMkdirErr.code) && mkdirAttempts < SWAP_MAX_RETRIES) {
+            await new Promise((r) => setTimeout(r, 250 * (mkdirAttempts + 1)));
+            mkdirAttempts++;
+            continue;
+          }
+          break;
         }
+      }
+      if (!mkdirOk) {
+        const code = lastMkdirErr?.code ?? 'unknown';
+        result.blocked.push(rel);
+        result.warnings.push(
+          PERM_ERRNO_CODES.has(code ?? '')
+            ? `swap 跳过(目标目录权限不足 ${code}): ${rel}`
+            : `swap 跳过(创建目标父目录失败 ${code}): ${rel}`,
+        );
+        if (opts.executablePath && rel === opts.executablePath) {
+          result.executableUpdate = 'blocked';
+        }
+        continue;
+      }
+
+      // 7b. swap 主体(rename 或 copy+unlink),瞬时错误重试
+      let attempts = 0;
+      let done = false;
+      let lastErr: NodeJS.ErrnoException | null = null;
+      while (attempts <= SWAP_MAX_RETRIES && !done) {
+        try {
+          if (sameVol) {
+            await fs.rename(srcPath, tgtPath);
+          } else {
+            await fs.copyFile(srcPath, tgtPath);
+            await fs.unlink(srcPath);
+          }
+          done = true;
+        } catch (err) {
+          lastErr = err as NodeJS.ErrnoException;
+          const code = lastErr.code;
+          if (code && TRANSIENT_ERRNO_CODES.has(code) && attempts < SWAP_MAX_RETRIES) {
+            attempts++;
+            // backoff:250ms × 尝试次数(1→250, 2→500, 3→750)
+            await new Promise((r) => setTimeout(r, 250 * attempts));
+            continue;
+          }
+          break; // 非瞬时或重试用尽 → 跳出
+        }
+      }
+
+      if (done) {
         result.applied.push(rel);
         swappedCount++;
         // ★ Heartbeat:每 N 个文件 touch 一次锁文件,让 mtime 保持新鲜
-        // 否则真 swap 跑 30 秒以上会被自己(下次启动或别的 acquireSwapLock)
-        // 误判为 stale(30 秒阈值),互锁自伤。
         if (swappedCount % SWAP_HEARTBEAT_INTERVAL === 0) {
           try {
             await fs.utimes(lockPath, new Date(), new Date());
@@ -465,21 +609,29 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
           result.executableUpdate = 'success';
         }
         coreLog.info(`[swap] applied: ${rel}`);
-      } catch (err) {
-        const e = err as NodeJS.ErrnoException;
-        if (e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES' || e.code === 'ENOTEMPTY' || e.code === 'EEXIST') {
-          // 文件被锁(或目录非空)→ 跳过 + 警告,下次重试
-          result.blocked.push(rel);
-          result.warnings.push(`swap 跳过(${e.code}): ${rel}`);
-          // ★ 跟踪目标可执行文件被锁
-          if (opts.executablePath && rel === opts.executablePath) {
-            result.executableUpdate = 'blocked';
-          }
+      } else {
+        // swap 未成功,记录错误分类 + 重试信息
+        const code = (lastErr?.code ?? 'unknown') as string;
+        const errMsg = lastErr?.message ?? String(lastErr ?? '');
+        const retried = attempts > 0 ? `, 重试 ${attempts} 次仍失败` : '';
+        let label: string;
+        if (PERM_ERRNO_CODES.has(code)) {
+          label = `swap 跳过(权限不足 ${code}${retried})`;
+        } else if (CONFLICT_ERRNO_CODES.has(code)) {
+          label = `swap 跳过(冲突 ${code}${retried})`;
+        } else if (code === 'ENOSPC') {
+          label = `swap 跳过(磁盘空间不足)`;
+        } else if (code === 'EIO') {
+          label = `swap 跳过(I/O 错误 ${code}${retried})`;
         } else {
-          // 其他错误(磁盘满、路径太长等)→ 跳过 + 警告
-          result.blocked.push(rel);
-          result.warnings.push(`swap 跳过: ${rel} (${e.code ?? e.message})`);
+          label = `swap 跳过(${code}${retried})`;
         }
+        result.blocked.push(rel);
+        result.warnings.push(`${label}: ${rel}`);
+        if (opts.executablePath && rel === opts.executablePath) {
+          result.executableUpdate = 'blocked';
+        }
+        coreLog.warn(`[swap] blocked: ${rel} (${code}${retried}) ${errMsg}`);
       }
     }
 
