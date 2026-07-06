@@ -33,6 +33,41 @@ import { setActivityState } from './tray.js';
 
 const log = mainLog;
 
+/**
+ * 弹窗去重时间窗(ms)。
+ *
+ * 同一 fp 在窗口内不会被再次决定为 popup。覆盖两个场景:
+ *   1. scheduler 周期 tick 紧挨 user:decide apply 后跑完 → 同样 fp 的 sync 接连完成两次
+ *   2. handlePopupDecision 自身是 async(里面 state.load() + state.update() 是异步),
+ *      并发进入时两边都看到 lastShownChangeHash=null → 都返回 popup → 同一内容弹两次
+ *
+ * 注意:lastShownChangeHash 的持久化才是真正 dedup 来源,
+ * 这个 set 只在窗口内挡掉 race 触发,过了窗口后 fp 仍命中 lastShownChangeHash 也会被挡掉。
+ */
+const POPUP_DEDUP_WINDOW_MS = 3000;
+const recentlySentFp = new Map<string, number>();
+
+function markFpSent(fp: string): boolean {
+  const now = Date.now();
+  // 清掉过期的(避免无界增长)
+  for (const [k, t] of recentlySentFp) {
+    if (now - t > POPUP_DEDUP_WINDOW_MS) recentlySentFp.delete(k);
+  }
+  const last = recentlySentFp.get(fp);
+  if (last !== undefined && now - last < POPUP_DEDUP_WINDOW_MS) {
+    return false; // 已被 dedup
+  }
+  recentlySentFp.set(fp, now);
+  return true;
+}
+
+/**
+ * 测试用:清除 dedup map(避免跨用例污染)。
+ */
+export function _resetPopupDedupForTests(): void {
+  recentlySentFp.clear();
+}
+
 export interface SchedulerEventDeps {
   /** 用 getter 打破循环引用(Scheduler.onSync 引用 Scheduler 自身) */
   getScheduler: () => Scheduler | null;
@@ -113,9 +148,15 @@ export function buildOnSyncHandler(deps: SchedulerEventDeps): (r: SyncResult) =>
 }
 
 /**
- * 弹窗决策:调 detector.decide → 发 update:prompt + 弹主窗 + Toast
+ * 弹窗决策:调 detector.decide → 发 update:prompt + 弹主窗 + Toast + 写入 lastShownChangeHash
+ *
+ * 关键:弹窗弹出后**必须**写 lastShownChangeHash,否则下次同 fp 的 sync
+ *   会重新弹(用户感受"连续弹两个框")。
+ *   detector.decide 的 "already-shown" 分支靠这个字段去重。
+ *
+ * exported:供单元测试验证 dedup 行为。
  */
-async function handlePopupDecision(
+export async function handlePopupDecision(
   r: SyncResult,
   stateMgr: StateManager | null,
   getMainWindow: () => BrowserWindow | null,
@@ -137,6 +178,23 @@ async function handlePopupDecision(
 
   const fingerprint = decision.fingerprint;
   log.info(`[decide] ${decision.kind} (${decision.kind === 'popup' ? decision.reason : 'locked'}) hash=${fingerprint.hash}`);
+
+  // Race 去重:同 fp 在窗口内已经被"决定要弹"就别再发一次 IPC。
+  // 注意:这里 dedup 的是"发 IPC"动作,state 持久化才是真正去重来源(下一段就写)。
+  if (!markFpSent(fingerprint.hash)) {
+    log.info(`[decide] 同 fp 在 dedup 窗口内(${POPUP_DEDUP_WINDOW_MS}ms),跳过重复 IPC`);
+    return;
+  }
+
+  // ★ 写 lastShownChangeHash — 必须先于任何"发 IPC/弹主窗"步骤。
+  // 即使后面的 webContents.send 失败、窗口销毁、或 renderer 正处于 reload 中,
+  // state 层的 already-shown 去重仍能保证下一轮同 fp sync 静默,
+  // 避免用户感受的"连续弹两个框"反复出现。
+  try {
+    await stateMgr.update({ lastShownChangeHash: fingerprint.hash });
+  } catch (err) {
+    log.warn(`[decide] 写 lastShownChangeHash 失败(非致命): ${(err as Error).message}`);
+  }
 
   const w = getMainWindow();
   if (!w || w.isDestroyed()) return;

@@ -236,7 +236,6 @@ describe('Swapper - heartbeat 锁文件 mtime', () => {
   // 之前没有 heartbeat,真 swap 跑 30+ 秒被 STALE_LOCK_TIMEOUT_MS 30s 误判 stale。
   // 注意:SWAP_HEARTBEAT_INTERVAL=100,所以小于 100 文件不会触发。
   it('swap 跑 N 个文件(N < 100)→ 锁文件被 utimes 0 次(mtime 是创建时)', async () => {
-    const lockPath = join(stagingDir, '.swapping');
     // 先建 staging 内容(50 个文件,小于 100)
     const files = Array.from({ length: 50 }, (_, i) => ({
       relPath: `f${String(i).padStart(3, '0')}.txt`,
