@@ -677,7 +677,17 @@ app.whenReady().then(async () => {
   setAppMenu();
   createWindow();
   createTray({
-    onRunNow: () => scheduler?.runNow(),
+    // 用户从托盘点"立即检查一次" → 主动重新确认。
+    // 清掉 lastShownChangeHash 让 decide() 不再走 already-shown 静默,
+    // 同样的 diff 会被重新弹窗询问。
+    // 备注:之前不弹窗就是因为 auto-popup 写完 hash 后,tray 触发的 runNow 跑出同样 fp
+    //       → decide 永远 silent → 用户感受"明明有改动却不弹"。
+    onRunNow: async () => {
+      if (stateMgr) {
+        await stateMgr.update({ lastShownChangeHash: null });
+      }
+      return scheduler?.runNow();
+    },
     getRemoteInfo: () => remoteInfo,
   });
 

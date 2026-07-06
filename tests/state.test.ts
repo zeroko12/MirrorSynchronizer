@@ -76,6 +76,51 @@ describe('StateManager', () => {
     await sm.unlockPostRollback();
     expect((await sm.load()).postRollbackLock).toBeNull();
   });
+
+  // ★ 回归:托盘"立即检查一次"行为
+  //   之前:scheduler.runNow() 跑出来的 fp 等于 state.lastShownChangeHash
+  //         → decide 走 already-shown 静默 → 用户感受"明明有改动却不弹框"
+  //   现在:托盘回调里调 stateMgr.update({ lastShownChangeHash: null }) 后再 runNow
+  //         → 同样的 fp 会再次触发 popup
+  //   这里测的是"清掉已展示 hash" 等价 markUnread 这条路径
+  it('托盘立即检查一次:清掉 lastShownChangeHash 后,decide 不再走 already-shown', async () => {
+    const { decide, computeFingerprint } = await import('../src/core/detector.js');
+    const r = {
+      added: ['new.txt'], modified: [], deleted: [],
+      ok: true, startedAt: 0, durationMs: 0,
+      mappingCopied: [], mappingSkippedExisting: [], mappingSkipped: [],
+      unchanged: 0, warnings: [], backupCreated: false,
+    } as const;
+    const fp = computeFingerprint(r as any).hash;
+
+    // 1) 之前弹过 → hash 已写
+    await sm.update({ lastShownChangeHash: fp });
+    expect((await sm.load()).lastShownChangeHash).toBe(fp);
+
+    // 2) 假装 decide 跑(模拟 periodic sync)
+    let d = decide({
+      result: r as any,
+      lastShownChangeHash: (await sm.load()).lastShownChangeHash,
+      popupEnabled: true,
+      snoozeUntil: 0,
+      isPostRollbackLockActive: false,
+    });
+    expect(d.kind).toBe('silent'); // already-shown
+
+    // 3) 托盘"立即检查一次" → 清掉 hash
+    await sm.update({ lastShownChangeHash: null });
+    expect((await sm.load()).lastShownChangeHash).toBeNull();
+
+    // 4) 重新 decide(模拟托盘触发的 runNow 完成后的 handlePopupDecision)
+    d = decide({
+      result: r as any,
+      lastShownChangeHash: (await sm.load()).lastShownChangeHash,
+      popupEnabled: true,
+      snoozeUntil: 0,
+      isPostRollbackLockActive: false,
+    });
+    expect(d.kind).toBe('popup');
+  });
 });
 
 describe('defaultStatePath', () => {

@@ -182,18 +182,24 @@ export class Scheduler {
       // 2. 常规 sync
       const result = await this.runOnce();
 
-      // 2.5 staging 模式 + 本次 sync 写了 staging 内容(force 触发时被清空的状态恢复后),
-      //     launch 之前必须确保 staging 已 swap 到 target,否则启动的还是旧文件
-      //     (dryRun 不走这条路径因为 dryRun 不写 staging)
+      // 2.5 staging 模式 + 本次 sync 写了 staging 内容 → 立即 swap 到 target
+      //
+      // 之前把这段 gate 在 `this.config.executablePath` 上:注释说"launch 之前必须 swap",
+      // 但 staging 模式 + force runNow(保存并立即同步 / web 立即同步 / 弹窗 apply)+ 没配
+      // executablePath 时,这步被跳过 → 文件留在 stagingDir 里,target 看上去没变。
+      // 用户从 web UI 看到"成功"是因为 result.ok=true(没 fatal),但实际改动没落地。
+      //
+      // 修复:不 gate on executablePath — staging 模式下任何成功的写 staging 都应当 swap
+      // (launch 守卫仍然在 step 3,只跟"是否启动目标程序"有关)。
+      // (dryRun 不走这条路径因为 dryRun 不写 staging。)
       if (
         !this.dryRunMode &&
         !swapResult &&
-        this.config.applyMode === 'staging' &&
-        this.config.executablePath
+        this.config.applyMode === 'staging'
       ) {
         const stagingDir = this.config.stagingDir || deriveDefaultStagingDir(this.config.targetDir);
         if (await hasPendingApply(stagingDir)) {
-          coreLog.info(`[scheduler] 本次 sync 写入了 staging,launch 前强制 swap`);
+          coreLog.info(`[scheduler] 本次 sync 写入了 staging,强制 swap 到 target`);
           swapResult = await applyPending({
             targetDir: this.config.targetDir,
             stagingDir,

@@ -232,6 +232,70 @@ describe('Scheduler', () => {
     launchSpy.mockRestore();
   });
 
+  // ★ 回归:staging 模式 + force runNow + 没有 executablePath(纯同步场景)
+  //   之前 step 2.5 被 gate 在 this.config.executablePath 上 → 没有可执行的就跳过 swap
+  //   → runNow 完成后 staging 里堆着新文件,target 仍是旧版。
+  //   → web UI 看到 result.ok=true 报"成功",但 target 里啥都没变,误以为漏报。
+  // 现在:step 2.5 不再 gate on executablePath — staging 模式下任何 force runNow
+  //      写了 staging 都应当 swap 到 target。
+  it('staging 模式 + 没 executablePath → step 2.5 仍 swap pending 到 target', async () => {
+    const cfg: AppConfig = {
+      ...config,
+      applyMode: 'staging',
+      // executablePath 留空:纯同步场景(常见于"工具只管同步,目标程序不归我们管")
+      executablePath: '',
+    };
+    await writeTree(sourceDir, [
+      { relPath: 'data/file1.txt', content: 'NEW-1' },
+      { relPath: 'data/file2.txt', content: 'NEW-2' },
+    ]);
+
+    const sch = new Scheduler({ config: cfg, indexCachePath });
+    const r = await sch.runNow({ force: true });
+    expect(r?.ok).toBe(true);
+
+    const stagingDir = cfg.stagingDir || `${cfg.targetDir}-staging`;
+    // ★ 关键:target 真的收到新文件(不是只停在 staging)
+    const targetFile1 = await fs.readFile(join(cfg.targetDir, 'data', 'file1.txt'), 'utf-8').catch(() => null);
+    const targetFile2 = await fs.readFile(join(cfg.targetDir, 'data', 'file2.txt'), 'utf-8').catch(() => null);
+    expect(targetFile1).toBe('NEW-1');
+    expect(targetFile2).toBe('NEW-2');
+
+    // staging 清空(swap 完成)
+    const remaining = await fs.readdir(stagingDir).catch(() => []);
+    expect(remaining.filter((n) => !n.startsWith('.'))).toEqual([]);
+
+    // 没 launch(executablePath 空)
+    expect(r?.launchedPid).toBeUndefined();
+  });
+
+  // ★ 回归:staging + force runNow + 已有 pending → step 1 直接 swap,step 2.5 跳过(不重复 swap)
+  //   防止 step1 + step2.5 两次 swap 互相覆盖 index 状态 / 浪费 backup 槽位
+  it('staging 模式 + force runNow + 已有 pending → step 1 swap,step 2.5 不重复', async () => {
+    const cfg: AppConfig = {
+      ...config,
+      applyMode: 'staging',
+      executablePath: '',
+    };
+    // 准备:target 有 v1,staging 里有 .pending-apply + 新内容 v2
+    await writeTree(cfg.targetDir, [{ relPath: 'old.txt', content: 'OLD' }]);
+    await writeTree(`${cfg.targetDir}-staging`, [
+      { relPath: '.pending-apply', content: '' },
+      { relPath: 'old.txt', content: 'NEW-V2' },
+    ]);
+
+    // 第二次 sync 不带新文件,只确认 step 2.5 跳过
+    await writeTree(sourceDir, [{ relPath: 'old.txt', content: 'OLD' }]); // 和 target 一样,无新 diff
+
+    const sch = new Scheduler({ config: cfg, indexCachePath });
+    const r = await sch.runNow({ force: true });
+    expect(r?.ok).toBe(true);
+
+    // step 1 已经把 v2 swap 进去了
+    const targetContent = await fs.readFile(join(cfg.targetDir, 'old.txt'), 'utf-8');
+    expect(targetContent).toBe('NEW-V2');
+  });
+
   // ★ 回归:周期调度(force=false)即使有 executablePath + sync 成功也不 launch
   // 此前 bug:周期 dryRun 跑出 ok=true,result.executableUpdate 没设 → finalUpdate 兜底 'success' → 误 launch
   // 守卫:step3 launch 加 options.force 守卫 → 周期调度 force=false 不进

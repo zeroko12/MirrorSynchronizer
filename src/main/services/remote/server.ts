@@ -165,24 +165,27 @@ export async function startRemoteServer(deps: ServerDeps): Promise<RemoteServerH
       // 超时后仍然发 ack(失败状态),让 web 端不卡转圈
       const SYNC_TIMEOUT_MS = 90_000;
       void (async () => {
-        let ok = true;
+        let caughtErr: unknown = null;
+        let result: unknown = null;
         try {
-          const result = await Promise.race([
+          result = await Promise.race([
             Promise.resolve(deps.onRemoteRunNow()),
             new Promise((_, reject) =>
               setTimeout(() => reject(new Error(`remote run-sync 超时 ${SYNC_TIMEOUT_MS / 1000}s`)), SYNC_TIMEOUT_MS),
             ),
           ]);
-          log.info('[server] remote run-sync done');
-          ok = result != null;
         } catch (err) {
-          log.error(`[server] remote run-sync 失败: ${(err as Error).message}`);
-          ok = false;
+          caughtErr = err;
         }
+        const ack = buildRunSyncAck(result, caughtErr);
+        log.info(
+          `[server] remote run-sync done ok=${ack.ok} added=${ack.added} modified=${ack.modified} deleted=${ack.deleted}` +
+          (ack.fatal ? ` fatal=${ack.fatal}` : ''),
+        );
         if (client.ws.readyState === client.ws.OPEN) {
           client.ws.send(JSON.stringify({
             type: 'run-sync-ack',
-            ok,
+            ...ack,
           }));
         }
       })();
@@ -218,6 +221,57 @@ export async function startRemoteServer(deps: ServerDeps): Promise<RemoteServerH
     broadcast: (payload) => wsHub.broadcast(payload),
     getClientCount: () => wsHub.count,
     close: () => closeRemoteServer(httpServer, wsServer, wsHub),
+  };
+}
+
+/**
+ * run-sync 消息回传的 ack 字段。
+ * 暴露成纯函数给单元测试,避免通过 ws/http 间接测。
+ */
+export interface RunSyncAck {
+  ok: boolean;
+  fatal: string | null;
+  added: number;
+  modified: number;
+  deleted: number;
+}
+
+/**
+ * 把 onRemoteRunNow() 的返回值(+ 捕获的异常)归一化为 web UI 用的 ack。
+ *
+ * 之前的版本只 `result != null` 判 ok → fatalError 也会报成功。
+ *   用户感受"显示同步成功,但实际上并没有同步成功"。
+ * 现在正确判定:
+ *   - 异常 → ok=false + fatal=err.message
+ *   - result 为 null / 非对象 → ok=false + fatal="scheduler 未返回结果"
+ *   - result.ok=false → ok=false + fatal=result.fatalError
+ *   - result.ok=true  → ok=true + added/modified/deleted 计数
+ */
+export function buildRunSyncAck(result: unknown, caughtErr: unknown = null): RunSyncAck {
+  if (caughtErr) {
+    const msg = caughtErr instanceof Error ? caughtErr.message : String(caughtErr);
+    return { ok: false, fatal: msg, added: 0, modified: 0, deleted: 0 };
+  }
+  if (!result || typeof result !== 'object' || !('ok' in result)) {
+    return { ok: false, fatal: 'scheduler 未返回结果', added: 0, modified: 0, deleted: 0 };
+  }
+  const r = result as {
+    ok: unknown;
+    fatalError?: unknown;
+    added?: unknown;
+    modified?: unknown;
+    deleted?: unknown;
+  };
+  if (r.ok !== true) {
+    const fatal = typeof r.fatalError === 'string' ? r.fatalError : '同步失败';
+    return { ok: false, fatal, added: 0, modified: 0, deleted: 0 };
+  }
+  return {
+    ok: true,
+    fatal: null,
+    added: Array.isArray(r.added) ? r.added.length : 0,
+    modified: Array.isArray(r.modified) ? r.modified.length : 0,
+    deleted: Array.isArray(r.deleted) ? r.deleted.length : 0,
   };
 }
 
