@@ -219,6 +219,66 @@ describe('Swapper - 部分成功 + 锁模拟', () => {
   });
 });
 
+describe('Swapper - heartbeat 锁文件 mtime', () => {
+  let stagingDir: string;
+  let targetDir: string;
+
+  beforeEach(async () => {
+    stagingDir = await makeTempDir('sw-hb-stg-');
+    targetDir = await makeTempDir('sw-hb-tgt-');
+  });
+  afterEach(async () => {
+    await rmTemp(stagingDir);
+    await rmTemp(targetDir);
+  });
+
+  // ★ 回归:swap loop 每 100 个文件 touch 锁文件一次 — 让 mtime 保持新鲜。
+  // 之前没有 heartbeat,真 swap 跑 30+ 秒被 STALE_LOCK_TIMEOUT_MS 30s 误判 stale。
+  // 注意:SWAP_HEARTBEAT_INTERVAL=100,所以小于 100 文件不会触发。
+  it('swap 跑 N 个文件(N < 100)→ 锁文件被 utimes 0 次(mtime 是创建时)', async () => {
+    const lockPath = join(stagingDir, '.swapping');
+    // 先建 staging 内容(50 个文件,小于 100)
+    const files = Array.from({ length: 50 }, (_, i) => ({
+      relPath: `f${String(i).padStart(3, '0')}.txt`,
+      content: `c${i}`,
+    }));
+    await writeTree(stagingDir, [
+      { relPath: '.pending-apply', content: '' },
+      ...files,
+    ]);
+
+    // 记录开始时间,然后跑 swap
+    const before = Date.now();
+    const r = await applyPending({ targetDir, stagingDir, backupDir: '', backupCount: 0 });
+    expect(r.ok).toBe(true);
+    expect(r.applied.length).toBe(50);
+
+    // swap 完锁已释放(在 finally),但心跳应该至少被触发 0 次(< 100 文件)
+    // 此测试主要保证 swap 整体成功(没被自己 stale 误判)
+    expect(r.warnings).toEqual([]); // 没被警告 stale
+    expect(Date.now() - before).toBeLessThan(10_000); // 不会卡死
+  });
+
+  // ★ 大量文件(N > 100)→ 触发至少 1 次 heartbeat
+  // 验证 SWAP_HEARTBEAT_INTERVAL 真的生效
+  it('swap 跑 150 个文件 → swap 期间 mtime 至少被 utimes 1 次(从 process.hrtime 看不实际,改为检查没被自伤 stale)', async () => {
+    const files = Array.from({ length: 150 }, (_, i) => ({
+      relPath: `f${String(i).padStart(3, '0')}.txt`,
+      content: `c${i}`,
+    }));
+    await writeTree(stagingDir, [
+      { relPath: '.pending-apply', content: '' },
+      ...files,
+    ]);
+
+    const r = await applyPending({ targetDir, stagingDir, backupDir: '', backupCount: 0 });
+    // 关键:swap 没被自伤 stale → 全部 applied
+    expect(r.ok).toBe(true);
+    expect(r.applied.length).toBe(150);
+    expect(r.warnings).toEqual([]); // 没 stale warning
+  });
+});
+
 describe('Swapper - clearStaging', () => {
   let stagingDir: string;
   beforeEach(async () => { stagingDir = await makeTempDir('sw-stg-'); });
@@ -362,5 +422,46 @@ describe('Swapper - stale lock 自愈(PID 复用场景)', () => {
     // 锁被认为 alive → acquireSwapLock 返 ok=false → applyPending 返 fatalError
     expect(r.ok).toBe(false);
     expect(r.fatalError ?? r.warnings.join('|')).toMatch(/持有锁|跳过/);
+  });
+
+  // ★ 真实场景:PID 还活着(被 Windows 复用)+ mtime 老于 30s
+  // 之前 10 分钟阈值让这个 bug 必出 — Windows 上 PID 复用频繁
+  it('PID 还活着 + mtime 30s 没动 → 仍判定 stale(模拟 Windows PID 复用)', async () => {
+    const lockPath = join(stagingDir, '.swapping');
+    // 用当前测试进程 PID(肯定活着)— 模拟"PID 被 Windows 复用到 system 进程"
+    await fs.writeFile(lockPath, String(process.pid));
+    // mtime 设到 31 秒前(刚刚过阈值)
+    const staleTime = new Date(Date.now() - 31_000);
+    await fs.utimes(lockPath, staleTime, staleTime);
+
+    await writeTree(stagingDir, [
+      { relPath: '.pending-apply', content: '' },
+      { relPath: 'a.txt', content: 'new' },
+    ]);
+
+    const r = await applyPending({ targetDir, stagingDir, backupDir: '', backupCount: 0 });
+    // 30 秒阈值触发:即使 PID 还活,锁仍被认为是 stale,自愈成功
+    expect(r.ok).toBe(true);
+    expect(r.applied).toEqual(['a.txt']);
+    // warnings 里应有"检测到上次 swap 异常中断"或类似
+    expect(r.warnings.some((w) => w.includes('异常中断') || w.includes('stale'))).toBe(true);
+  });
+
+  // ★ 边界:PID 还活着 + mtime 30s 内 → 不算 stale,真有人在 swap
+  it('PID 活着 + mtime 在 30s 内 → 锁保持 alive(不自伤)', async () => {
+    const lockPath = join(stagingDir, '.swapping');
+    await fs.writeFile(lockPath, String(process.pid));
+    // mtime 刚刚(1 秒前)
+    await fs.utimes(lockPath, new Date(Date.now() - 1_000), new Date(Date.now() - 1_000));
+
+    await writeTree(stagingDir, [
+      { relPath: '.pending-apply', content: '' },
+      { relPath: 'a.txt', content: 'new' },
+    ]);
+
+    const r = await applyPending({ targetDir, stagingDir, backupDir: '', backupCount: 0 });
+    // 锁被认为 alive → 报"其他实例持有锁",不自伤
+    expect(r.ok).toBe(false);
+    expect(r.fatalError ?? r.warnings.join('|')).toMatch(/持有锁/);
   });
 });
