@@ -310,3 +310,57 @@ describe('Swapper - 备份轮转集成', () => {
     expect(backups.length).toBe(2);
   });
 });
+
+describe('Swapper - stale lock 自愈(PID 复用场景)', () => {
+  let stagingDir: string;
+  let targetDir: string;
+
+  beforeEach(async () => {
+    stagingDir = await makeTempDir('sw-stale-stg-');
+    targetDir = await makeTempDir('sw-stale-tgt-');
+  });
+  afterEach(async () => {
+    await rmTemp(stagingDir);
+    await rmTemp(targetDir);
+  });
+
+  // ★ 回归:stale lock 自愈 — 之前进程崩溃留下 .swapping + PID,
+  // PID 被 Windows 复用(系统进程),isPidAlive 返 true(EPERM)，
+  // 10 分钟阈值让锁永远不释放。
+  // 修:STALE_LOCK_TIMEOUT_MS 缩到 30 秒 + PID 不论死活只要 mtime 老就 stale。
+  it('PID 被复用 + mtime 老 → acquireSwapLock 仍清理(自愈)', async () => {
+    // 模拟"上次进程崩溃留的锁":写一个 .swapping,内容是已经死掉的进程 PID,
+    // 然后把 mtime 改到 1 分钟前(老于 30 秒阈值)
+    const lockPath = join(stagingDir, '.swapping');
+    await fs.writeFile(lockPath, '999999'); // 假设 PID 999999 已死
+    const oneMinAgo = new Date(Date.now() - 60_000);
+    await fs.utimes(lockPath, oneMinAgo, oneMinAgo);
+
+    // 写 .pending-apply + 一个文件,触发 acquireSwapLock
+    await writeTree(stagingDir, [
+      { relPath: '.pending-apply', content: '' },
+      { relPath: 'a.txt', content: 'new' },
+    ]);
+    const r = await applyPending({ targetDir, stagingDir, backupDir: '', backupCount: 0 });
+    expect(r.ok).toBe(true);
+    expect(r.applied).toEqual(['a.txt']);
+    // target 收到文件(说明锁被清掉,swap 跑成功了)
+    expect((await fs.readFile(join(targetDir, 'a.txt'), 'utf-8'))).toBe('new');
+  });
+
+  it('PID 是当前进程 + mtime 新鲜 → 锁被识别为 alive(不自伤)', async () => {
+    // 模拟"其他实例正在跑 swap":写一个 .swapping,内容是当前 PID,
+    // mtime 保持新鲜(刚刚写),并有 pending 内容让 applyPending 真走到 acquireSwapLock
+    const lockPath = join(stagingDir, '.swapping');
+    await fs.writeFile(lockPath, String(process.pid));
+    await writeTree(stagingDir, [
+      { relPath: '.pending-apply', content: '' },
+      { relPath: 'a.txt', content: 'new' },
+    ]);
+
+    const r = await applyPending({ targetDir, stagingDir, backupDir: '', backupCount: 0 });
+    // 锁被认为 alive → acquireSwapLock 返 ok=false → applyPending 返 fatalError
+    expect(r.ok).toBe(false);
+    expect(r.fatalError ?? r.warnings.join('|')).toMatch(/持有锁|跳过/);
+  });
+});

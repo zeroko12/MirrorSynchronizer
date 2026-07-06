@@ -30,6 +30,24 @@ const PENDING_APPLY_FILE = '.pending-apply';
 const SWAPPING_LOCK_FILE = '.swapping';
 const SWAP_STAGING_DIR = '.swap-staging';
 
+/**
+ * 锁文件 stale 判定阈值。
+ *
+ * 真 swap 跑 10000 个文件也就几分钟,30 秒不更新 mtime = 真卡死或进程崩。
+ * 关键场景:之前 swap 进程被 kill -9(强关、电源断)→ .swapping 文件留在盘上,
+ * 上次进程的 PID 在 Windows 上经常被其他进程复用(PID 数字只到几万,系统满了循环用),
+ * isPidAlive 返 true(EPERM) → 锁永远不释放。
+ *
+ * 之前的 10 分钟阈值让这个 bug 在 PID 复用场景下必出现。
+ * 改 30 秒:真 swap loop 每 100 个文件 touch 一次 mtime(见 swapHeartbeat),
+ *          真在跑 swap → mtime 永远新鲜 → 锁不被误清;
+ *          进程崩溃 + PID 复用 → mtime 30 秒没更新 → 锁被认为 stale → 自愈。
+ */
+const STALE_LOCK_TIMEOUT_MS = 30_000;
+
+/** swap loop 每 N 个文件 touch 一次锁文件,让 mtime 保持新鲜 */
+const SWAP_HEARTBEAT_INTERVAL = 100;
+
 export interface SwapOptions {
   /** 真正的同步目标 */
   targetDir: string;
@@ -206,7 +224,7 @@ type LockAcquireResult =
  * - 'alive' : 锁文件存在且真的有人在跑
  */
 async function isLockStale(stagingDir: string): Promise<'none' | 'stale' | 'alive'> {
-  const STALE_MTIME_MS = 10 * 60 * 1000;
+  const STALE_MTIME_MS = STALE_LOCK_TIMEOUT_MS;
   let stat: import('node:fs').Stats;
   try {
     stat = await fs.stat(join(stagingDir, SWAPPING_LOCK_FILE));
@@ -233,8 +251,8 @@ async function isLockStale(stagingDir: string): Promise<'none' | 'stale' | 'aliv
  * .swapping 文件留在盘上,下次启动会一直报"其他实例持有锁",重启电脑也没用(文件还在)。
  */
 async function acquireSwapLock(lockPath: string): Promise<LockAcquireResult> {
-  // STALE 判定:文件 mtime 超过 10 分钟 — 真 swap 不会跑这么久,10 分钟绝对算 crash
-  const STALE_MTIME_MS = 10 * 60 * 1000;
+  // 共享 STALE_LOCK_TIMEOUT_MS(顶部定义)— 30 秒
+  const STALE_MTIME_MS = STALE_LOCK_TIMEOUT_MS;
   let recoveredFrom: number | undefined; // 清掉的 stale lock 原 PID(给 log/warning)
 
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -415,6 +433,7 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
     }
 
     // 7. 逐个 swap
+    let swappedCount = 0;
     for (const rel of pendingFiles) {
       const srcPath = join(stagingDir, rel);
       const tgtPath = join(targetDir, rel);
@@ -430,6 +449,17 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
           await fs.unlink(srcPath);
         }
         result.applied.push(rel);
+        swappedCount++;
+        // ★ Heartbeat:每 N 个文件 touch 一次锁文件,让 mtime 保持新鲜
+        // 否则真 swap 跑 30 秒以上会被自己(下次启动或别的 acquireSwapLock)
+        // 误判为 stale(30 秒阈值),互锁自伤。
+        if (swappedCount % SWAP_HEARTBEAT_INTERVAL === 0) {
+          try {
+            await fs.utimes(lockPath, new Date(), new Date());
+          } catch {
+            // lockPath 已被其他进程删了(理论上不该,但兜底)→ 继续
+          }
+        }
         // ★ 跟踪目标可执行文件 swap 结果
         if (opts.executablePath && rel === opts.executablePath) {
           result.executableUpdate = 'success';
