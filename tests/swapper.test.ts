@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { promises as fs } from 'node:fs';
+import { promises as fs, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { applyPending, clearStaging, countPendingApply, hasPendingApply } from '../src/core/swapper.js';
 import { makeTempDir, rmTemp, writeFile, writeTree } from './helpers.js';
@@ -629,5 +629,152 @@ describe('Swapper - isSameVolume probe 残留防护', () => {
     const targetEntries = await fs.readdir(targetDir);
     expect(stagingEntries.filter((n) => n.startsWith('.__probe_') || n.startsWith('.__wprobe_'))).toEqual([]);
     expect(targetEntries.filter((n) => n.startsWith('.__probe_') || n.startsWith('.__wprobe_'))).toEqual([]);
+  });
+});
+
+describe('Swapper - staging .pending-delete.json(源删除传播到 target)', () => {
+  let stagingDir: string;
+  let targetDir: string;
+
+  beforeEach(async () => {
+    stagingDir = await makeTempDir('sw-del-stg-');
+    targetDir = await makeTempDir('sw-del-tgt-');
+  });
+  afterEach(async () => {
+    await rmTemp(stagingDir);
+    await rmTemp(targetDir);
+  });
+
+  // ★ 核心回归:用户报告"检测到 -1 但点同步 target 不删"的修复
+  //   swapper 读 stagingDir/.pending-delete.json,逐个 target.unlink,带 transient 重试
+  it('swap 读 .pending-delete.json → 真从 target 删 + 计数计入 deletionsApplied', async () => {
+    // target 里有将要被删的文件
+    await writeFile(join(targetDir, 'old-file.txt'), 'OLD');
+    await writeFile(join(targetDir, 'kept.txt'), 'KEPT'); // 不在待删列表里
+    // 在 staging 写 .pending-delete.json
+    await fs.writeFile(
+      join(stagingDir, '.pending-delete.json'),
+      JSON.stringify({ rels: ['old-file.txt'], writtenAt: Date.now() }, null, 2),
+    );
+
+    const r = await applyPending({
+      targetDir, stagingDir, backupDir: '', backupCount: 0,
+    });
+
+    // target/old-file.txt 真删了
+    expect(existsSync(join(targetDir, 'old-file.txt'))).toBe(false);
+    // 没动的还在
+    expect(existsSync(join(targetDir, 'kept.txt'))).toBe(true);
+
+    // 计数
+    expect(r.deletionsApplied).toEqual(['old-file.txt']);
+    expect(r.deletionsBlocked).toEqual([]);
+
+    // 标记文件已经被清(全成功)
+    expect(existsSync(join(stagingDir, '.pending-delete.json'))).toBe(false);
+  });
+
+  it('★ 待删多个 + 部分 ENOENT(target 已被人手动删)→ 全部计数,无 error', async () => {
+    // 待删 3 个文件,其中 1 个 target 里已不存在
+    await writeFile(join(targetDir, 'a.txt'), 'A');
+    await writeFile(join(targetDir, 'c.txt'), 'C');
+    // b.txt 不创建 — 模拟用户手动删了
+    await fs.writeFile(
+      join(stagingDir, '.pending-delete.json'),
+      JSON.stringify({ rels: ['a.txt', 'b.txt', 'c.txt'], writtenAt: Date.now() }, null, 2),
+    );
+
+    const r = await applyPending({
+      targetDir, stagingDir, backupDir: '', backupCount: 0,
+    });
+
+    // a + c 删了
+    expect(existsSync(join(targetDir, 'a.txt'))).toBe(false);
+    expect(existsSync(join(targetDir, 'c.txt'))).toBe(false);
+    // 3 个都计入 applied(ENOENT 算成功)
+    expect(r.deletionsApplied?.sort()).toEqual(['a.txt', 'b.txt', 'c.txt']);
+    expect(r.deletionsBlocked).toEqual([]);
+    expect(r.warnings).toEqual([]);
+    // marker 清掉
+    expect(existsSync(join(stagingDir, '.pending-delete.json'))).toBe(false);
+  });
+
+  // ★ 没有 marker → 跳过删除段(不影响 swap 主流程)
+  it('无 .pending-delete.json → 跳过删除段(deleted 数组保持空)', async () => {
+    // 只放 .pending-apply + 一个文件走正常 swap
+    await writeTree(stagingDir, [
+      { relPath: '.pending-apply', content: '' },
+      { relPath: 'new.txt', content: 'new' },
+    ]);
+    const r = await applyPending({
+      targetDir, stagingDir, backupDir: '', backupCount: 0,
+    });
+    expect(r.ok).toBe(true);
+    // deletions 数组初始化为 [],内容为空
+    expect(r.deletionsApplied).toEqual([]);
+    expect(r.deletionsBlocked).toEqual([]);
+  });
+
+  // ★ JSON 损坏 → 警告并跳过(不抛)
+  it('.pending-delete.json 损坏 → 不抛 swap 失败,只是跳删除段', async () => {
+    await writeFile(join(targetDir, 'a.txt'), 'A');
+    await fs.writeFile(join(stagingDir, '.pending-delete.json'), '{ not json');
+    const r = await applyPending({
+      targetDir, stagingDir, backupDir: '', backupCount: 0,
+    });
+    expect(r.ok).toBe(true);
+    // target 文件未动(因为解析失败没去删)
+    expect(existsSync(join(targetDir, 'a.txt'))).toBe(true);
+  });
+
+  it('★ 列表为空(rels:[])→ hasPendingApply=false 不触发 swap,marker 留下(下次 sync 会覆盖)', async () => {
+    await fs.writeFile(
+      join(stagingDir, '.pending-delete.json'),
+      JSON.stringify({ rels: [], writtenAt: Date.now() }, null, 2),
+    );
+    const r = await applyPending({
+      targetDir, stagingDir, backupDir: '', backupCount: 0,
+    });
+    // 没 .pending-apply + 空 rels → 无事可做,提前 ok
+    expect(r.ok).toBe(true);
+    expect(r.deletionsApplied).toEqual([]);
+    expect(r.deletionsBlocked).toEqual([]);
+    // marker 仍存在 — 下次 syncer.sync 时会自己清掉
+    // (syncer 5.1 节会保留空列表就 unlink marker)
+    expect(existsSync(join(stagingDir, '.pending-delete.json'))).toBe(true);
+  });
+
+  // ★ normal swap 也跑通后,待删文件被处理(集成场景)
+  it('★ 集成:staging 有新增 + 待删列表 → swap 后 target 同时新增和删除', async () => {
+    // target 里有旧文件,1 个要被删
+    await writeTree(targetDir, [
+      { relPath: 'add.txt', content: 'OLD-add' },
+      { relPath: 'remove.txt', content: 'OLD-remove' },
+      { relPath: 'keep.txt', content: 'KEEP' },
+    ]);
+    // staging 有新内容 + 待删标记
+    await writeTree(stagingDir, [
+      { relPath: '.pending-apply', content: '' },
+      { relPath: 'add.txt', content: 'NEW-add' },
+    ]);
+    await fs.writeFile(
+      join(stagingDir, '.pending-delete.json'),
+      JSON.stringify({ rels: ['remove.txt'], writtenAt: Date.now() }, null, 2),
+    );
+
+    const r = await applyPending({
+      targetDir, stagingDir, backupDir: '', backupCount: 0,
+    });
+
+    expect(r.ok).toBe(true);
+    // 新增 + 删除 都对
+    expect(r.applied).toEqual(['add.txt']);
+    expect(r.deletionsApplied).toEqual(['remove.txt']);
+    expect(existsSync(join(targetDir, 'add.txt'))).toBe(true);
+    expect((await fs.readFile(join(targetDir, 'add.txt'), 'utf-8'))).toBe('NEW-add');
+    expect(existsSync(join(targetDir, 'remove.txt'))).toBe(false);
+    expect(existsSync(join(targetDir, 'keep.txt'))).toBe(true);
+    // marker 清掉(全成功)
+    expect(existsSync(join(stagingDir, '.pending-delete.json'))).toBe(false);
   });
 });

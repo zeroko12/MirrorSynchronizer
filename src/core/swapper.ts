@@ -48,6 +48,12 @@ const STALE_LOCK_TIMEOUT_MS = 30_000;
 /** swap loop 每 N 个文件 touch 一次锁文件,让 mtime 保持新鲜 */
 const SWAP_HEARTBEAT_INTERVAL = 100;
 
+/**
+ * swap per-file 重试上限。瞬时 errno(EBUSY/EAGAIN/ENETUNREACH 等)重试这么多次,
+ * backoff 250ms × attempt。后续 processPendingDeletes 也用这套。
+ */
+const SWAP_MAX_RETRIES = 3;
+
 export interface SwapOptions {
   /** 真正的同步目标 */
   targetDir: string;
@@ -66,10 +72,22 @@ export interface SwapOptions {
 export interface SwapResult {
   /** 完全成功(applied + blocked 都齐全,无 fatalError) */
   ok: boolean;
-  /** 成功 swap 的文件 relPath 列表 */
+  /** 成功 swap 的文件 relPath 列表(从 staging 移到 target) */
   applied: string[];
   /** 仍被锁、跳过的文件 relPath 列表 */
   blocked: string[];
+  /**
+   * 成功从 target 删除的 relPath 列表(由 syncer.sync 写在 stagingDir/.pending-delete.json
+   * 里的"待删清单",swap 时实际尝试 target.unlink)。
+   *
+   * 与 applied 的区别:applied = 从 staging 移过去的(覆盖/新增),
+   *                  deletionsApplied = 从 target 删掉的(源删除传播)。
+   * 用户从 UI 看到的"-N 删除"对的就是这个字段的计数。
+   * 总是初始化为 [],就算没待删也是这样(便于 UI/调用方稳定读取)。
+   */
+  deletionsApplied: string[];
+  /** 删除被锁住跳过的 relPath 列表(下次 swap 会重试)。总是初始化为 []。 */
+  deletionsBlocked: string[];
   /** swap 前创建的 backup 路径(有就回填) */
   backupSnapshotPath?: string;
   /** 警告信息 */
@@ -95,16 +113,28 @@ export async function hasPendingApply(stagingDir: string): Promise<boolean> {
   } catch {
     return false;
   }
-  // 检查 .pending-apply
+  // 至少有以下之一,才算"待应用":
+  //   (a) .pending-apply 标记 + 有实际 staging 文件要覆盖
+  //   (b) .pending-delete.json 有非空 rels 列表(纯删除场景 — 用户源删了文件但 staging 无新增)
+  // 之前只看 (a),纯删除时 hasPendingApply 返回 false → swap 早返 → target 文件永远不删。
   try {
     await fs.stat(join(stagingDir, PENDING_APPLY_FILE));
-  } catch {
-    return false;
-  }
-  // 检查有没有实际文件(忽略标记文件和 .swap-staging)
-  try {
+    // .pending-apply 在 → 还要检查 staging 里有实际文件
     const entries = await fs.readdir(stagingDir);
-    return entries.some((name) => name !== PENDING_APPLY_FILE && name !== SWAP_STAGING_DIR && name !== SWAPPING_LOCK_FILE);
+    return entries.some(
+      (name) =>
+        name !== PENDING_APPLY_FILE &&
+        name !== SWAP_STAGING_DIR &&
+        name !== SWAPPING_LOCK_FILE &&
+        name !== PENDING_DELETE_FILE,
+    );
+  } catch {
+    /* .pending-apply 不存在,看 .pending-delete.json 是否带非空列表 */
+  }
+  try {
+    const raw = await fs.readFile(join(stagingDir, PENDING_DELETE_FILE), 'utf-8');
+    const parsed = JSON.parse(raw) as { rels?: unknown };
+    return Array.isArray(parsed.rels) && parsed.rels.length > 0;
   } catch {
     return false;
   }
@@ -119,7 +149,14 @@ export async function countPendingApply(stagingDir: string): Promise<number> {
     const entries = await fs.readdir(stagingDir);
     let count = 0;
     for (const name of entries) {
-      if (name === PENDING_APPLY_FILE || name === SWAP_STAGING_DIR || name === SWAPPING_LOCK_FILE) continue;
+      if (
+        name === PENDING_APPLY_FILE ||
+        name === SWAP_STAGING_DIR ||
+        name === SWAPPING_LOCK_FILE ||
+        name === PENDING_DELETE_FILE
+      ) {
+        continue;
+      }
       const sub = join(stagingDir, name);
       const st = await fs.stat(sub);
       if (st.isFile()) count++;
@@ -158,6 +195,7 @@ async function listPendingFiles(stagingDir: string): Promise<string[]> {
       const fullPath = join(dir, e.name);
       const rel = prefix ? `${prefix}/${e.name}` : e.name;
       if (rel === PENDING_APPLY_FILE || rel === SWAPPING_LOCK_FILE) continue;
+      if (rel === PENDING_DELETE_FILE) continue; // 删除清单标记文件,不当成 swap 内容
       if (rel === SWAP_STAGING_DIR) continue; // 整个 .swap-staging 目录跳过
       if (e.isDirectory()) {
         await walk(fullPath, rel);
@@ -438,6 +476,8 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
     ok: false,
     applied: [],
     blocked: [],
+    deletionsApplied: [],
+    deletionsBlocked: [],
     warnings: [],
   };
 
@@ -507,14 +547,24 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
 
     // 6. 列出待 swap 文件
     const pendingFiles = await listPendingFiles(stagingDir);
+
+    // ★ 7.5 提前到 6 之后、7 之前:runs 即便 pendingFiles 为空(纯删除场景)
+    //   上面的"早 return"会在下面被替换 → deletions 跟 renames 都跑得到。
+    //   顺序:先处理 deletions → 再做 file renames。
+    //   两者通常不冲突(renames 用 staging/rel → target/rel,删的是 target 上另一组 rel)。
+    await processPendingDeletes(stagingDir, targetDir, result);
+
     if (pendingFiles.length === 0) {
-      // pending 标记文件存在但没有实际文件 = 异常状态,清掉
+      // ★ 关键:之前这里直接 return → 跳过 processPendingDeletes → 纯删除场景失效
+      //   现在 processPendingDeletes 已经跑过,只需要清理掉"无效的 .pending-apply"
+      //   (有 .pending-delete.json 但没 .pending-apply 时它已经不存在,unlink 兜空)
       await fs.unlink(join(stagingDir, PENDING_APPLY_FILE)).catch(() => undefined);
       // executablePath 配置了但 staging 没内容 → 文件早被忽略或没动过
       if (opts.executablePath) {
         result.executableUpdate = 'skipped';
       }
       result.ok = true;
+      coreLog.info(`[swap] 完成 deletionsApplied=${result.deletionsApplied?.length ?? 0} deletionsBlocked=${result.deletionsBlocked?.length ?? 0}`);
       return result;
     }
 
@@ -657,6 +707,10 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
       coreLog.warn(`[swap] 部分成功 applied=${result.applied.length} blocked=${result.blocked.length}`);
     }
 
+    // 注:processPendingDeletes 已经在 step 6 之后(pendingFiles early return 之前)跑过了。
+    //   顺序:先处理 deletions → 再做 file renames(避免覆盖刚被删的文件,
+    //   同时也支持"纯删除场景":target 里有但 source 没有,没有 staging 文件可 swap)。
+
     // 9. executablePath 配置了但不在 pendingFiles 里(ignoreItems 命中 / 文件没变化)
     //    → 标记 skipped,scheduler 不会 launch
     if (opts.executablePath && !result.executableUpdate) {
@@ -673,6 +727,109 @@ export async function applyPending(opts: SwapOptions): Promise<SwapResult> {
   return result;
 }
 
+const PENDING_DELETE_FILE = '.pending-delete.json';
+
+/**
+ * 读 stagingDir/.pending-delete.json,把里面列的 rel 路径从 target 删除。
+ *
+ * 这是 staging 模式下"源删文件 → target 删文件"的传播路径:
+ * - syncer.sync 检测到 target 有但 source 没有的文件 → 写到 .pending-delete.json
+ * - swap 时本函数读出来逐个 target.unlink
+ * - 锁/权限失败 → 留在 JSON 下次重试
+ *
+ * 沿用 swap 主循环的 transient 重试 + errno 分类(代码复用 SWAP_MAX_RETRIES + TRANSIENT_ERRNO_CODES)。
+ */
+async function processPendingDeletes(
+  stagingDir: string,
+  targetDir: string,
+  result: SwapResult,
+): Promise<void> {
+  const markerPath = join(stagingDir, PENDING_DELETE_FILE);
+  let rels: string[];
+  try {
+    const raw = await fs.readFile(markerPath, 'utf-8');
+    const parsed = JSON.parse(raw) as { rels?: unknown };
+    if (!Array.isArray(parsed.rels)) {
+      coreLog.warn(`[swap] .pending-delete.json 格式异常,忽略: ${raw.slice(0, 120)}`);
+      return;
+    }
+    rels = parsed.rels.filter((x): x is string => typeof x === 'string');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      coreLog.warn(`[swap] 读 .pending-delete.json 失败: ${(err as Error).message}`);
+    }
+    return; // 无 marker = 无待删
+  }
+
+  if (rels.length === 0) {
+    await fs.unlink(markerPath).catch(() => undefined);
+    return;
+  }
+
+  const stillBlocked: string[] = [];
+  for (const rel of rels) {
+    const tgtPath = join(targetDir, rel);
+    let attempts = 0;
+    let done = false;
+    let lastErr: NodeJS.ErrnoException | null = null;
+    while (attempts <= SWAP_MAX_RETRIES && !done) {
+      try {
+        await fs.unlink(tgtPath);
+        done = true;
+      } catch (err) {
+        lastErr = err as NodeJS.ErrnoException;
+        const code = lastErr.code;
+        // ENOENT 算成功(target 已无此文件,通常是用户在 swap 之间手动删了)
+        if (code === 'ENOENT') {
+          done = true;
+          break;
+        }
+        // 瞬时错误 → 重试
+        if (code && TRANSIENT_ERRNO_CODES.has(code) && attempts < SWAP_MAX_RETRIES) {
+          attempts++;
+          await new Promise((r) => setTimeout(r, 250 * attempts));
+          continue;
+        }
+        break;
+      }
+    }
+
+    if (done) {
+      result.deletionsApplied.push(rel);
+      coreLog.info(`[swap] deleted from target: ${rel}`);
+    } else {
+      const code = (lastErr?.code ?? 'unknown') as string;
+      const retried = attempts > 0 ? `, 重试 ${attempts} 次仍失败` : '';
+      let label: string;
+      if (PERM_ERRNO_CODES.has(code)) {
+        label = `delete 跳过(权限不足 ${code}${retried})`;
+      } else if (CONFLICT_ERRNO_CODES.has(code)) {
+        label = `delete 跳过(冲突 ${code}${retried})`;
+      } else {
+        label = `delete 跳过(${code}${retried})`;
+      }
+      result.deletionsBlocked.push(rel);
+      result.warnings.push(`${label}: ${rel}`);
+      stillBlocked.push(rel);
+      coreLog.warn(`[swap] delete blocked: ${rel} (${code}${retried})`);
+    }
+  }
+
+  // 写回剩余(下次 swap 重试)or 清掉
+  try {
+    if (stillBlocked.length > 0) {
+      await fs.writeFile(
+        markerPath,
+        JSON.stringify({ rels: stillBlocked.sort(), writtenAt: Date.now() }, null, 2),
+      );
+    } else {
+      await fs.unlink(markerPath).catch(() => undefined);
+    }
+  } catch (err) {
+    result.warnings.push(`写回 .pending-delete.json 失败: ${(err as Error).message}`);
+  }
+}
+
 async function pruneEmptyDirs(root: string): Promise<void> {
   // 删 staging 里空目录(自底向上)
   const toDelete: string[] = [];
@@ -687,7 +844,12 @@ async function pruneEmptyDirs(root: string): Promise<void> {
     for (const e of entries) {
       const full = join(dir, e.name);
       // 不删标记文件 / mutex / swap-staging 目录
-      if (dir === root && (e.name === PENDING_APPLY_FILE || e.name === SWAPPING_LOCK_FILE)) {
+      if (
+        dir === root &&
+        (e.name === PENDING_APPLY_FILE ||
+          e.name === SWAPPING_LOCK_FILE ||
+          e.name === PENDING_DELETE_FILE)
+      ) {
         hasContent = true;
         continue;
       }

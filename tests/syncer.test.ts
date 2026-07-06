@@ -11,6 +11,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Syncer } from '../src/core/syncer.js';
 import { DEFAULT_CONFIG } from '../src/core/config.js';
@@ -751,7 +752,7 @@ describe('Syncer - applyMode=staging', () => {
     await expect(fs.stat(join(stagingDir, '.pending-apply'))).resolves.toBeTruthy();
   });
 
-  it('staging 模式:target 里的旧文件不会被删(避免误删正在运行的程序)', async () => {
+  it('staging 模式:target 里的旧文件 sync 不删(写到 .pending-delete.json 让 swap 处理)', async () => {
     config.stagingDir = stagingDir;
     await writeTree(targetDir, [
       { relPath: 'orphan.txt', content: 'OLD-orphan' },
@@ -761,12 +762,17 @@ describe('Syncer - applyMode=staging', () => {
     const syncer = new Syncer(config);
     const { result } = await syncer.sync(null);
 
-    // 镜像删除阶段记录 orphan.txt,但 staging 模式下 target 不删
+    // 镜像删除阶段记录 orphan.txt,staging 模式下 target 不直接删(避免误删正在运行的程序)
     expect(result.deleted).toEqual(['orphan.txt']);
     expect((await readTree(targetDir)).has('orphan.txt')).toBe(true);
     // staging 里也没有 orphan.txt(避免 swap 时带过去)
     const stagingTree = await readTree(stagingDir);
     expect(stagingTree.has('orphan.txt')).toBe(false);
+    // ★ 新行为:把待删列表写到 stagingDir/.pending-delete.json,swap 时实际 target.unlink
+    const markerPath = join(stagingDir, '.pending-delete.json');
+    expect(existsSync(markerPath)).toBe(true);
+    const parsed = JSON.parse(await fs.readFile(markerPath, 'utf-8'));
+    expect(parsed.rels).toEqual(['orphan.txt']);
   });
 
   it('staging 模式 + ignoreItems:被忽略的文件不进 staging', async () => {

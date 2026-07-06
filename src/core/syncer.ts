@@ -446,19 +446,29 @@ export class Syncer {
     }
 
     // 5. DELETE (镜像模式,但映射目标路径 + ignoreItems 豁免)
-    // staging 模式下:不删 target/ 里的文件(避免删正在运行的程序),
-    //   只清 stagingDir/ 里多余的"孤儿"(防止 swap 时把它们带过去)
+    //
+    // staging 模式行为修正:
+    //   之前 `unlink(writeDir/rel)` 永远 ENOENT(目标文件本不在 staging 里),
+    //   被 `if (ENOENT) continue` 吞掉 → target 文件永远不删。
+    //   用户体验:"检测到 -1 但点同步后 target 没删"。
+    // 现在:staging 模式把待删 rel 收集成列表,写到 stagingDir/.pending-delete.json,
+    //   swap 时再尝试从 target 删(用了现有 transient 重试 + 锁感知)。
+    //   immediate 模式不变:target.unlink 直接跑。
+    const pendingDeleteRels: string[] = [];
     for (const [rel] of targetMap) {
       if (sourceMap.has(rel)) continue; // 源里有,肯定不删
       if (exemptFromMirrorDelete.has(normalize(rel))) continue; // 映射目标 / 忽略目录,豁免
-      // dryRun 也记录将要删除
+      // 无论 dryRun 还是 real 都记录 — 用户能看到 "-1 删除"
       result.deleted.push(rel);
-      if (!dryRun) {
+      if (dryRun) continue;
+
+      if (writeDir !== targetDir) {
+        // staging 模式:留给 swap 处理(target 文件锁着时也不能直接删)
+        pendingDeleteRels.push(rel);
+      } else {
+        // immediate 模式:直接删 target
         try {
-          // staging 模式下写 dir 是 staging(清 staging 里多余的孤儿);
-          // immediate 模式直接删 target/
-          const deletePath = writeDir !== targetDir ? join(writeDir, rel) : join(targetDir, rel);
-          await fs.unlink(deletePath);
+          await fs.unlink(join(targetDir, rel));
         } catch (err) {
           const code = (err as NodeJS.ErrnoException).code;
           if (code === 'ENOENT') continue; // 已不存在,跳过
@@ -472,6 +482,36 @@ export class Syncer {
           }
           result.warnings.push(`删除失败: ${rel} (${reason ?? (err as Error).message})`);
         }
+      }
+    }
+
+    // 5.1 staging 模式:把待删列表写到 stagingDir/.pending-delete.json(swap 时读)
+    //
+    // 不管是 dryRun 还是 real 都"读"这个 marker(swap 时),只有 real sync 才写。
+    // 用户点 立即应用 触发 force sync 之前已有 dryRun period sync — dryRun 不写,
+    // 第一次 force sync 才生效,结果对了:staging 待删会被 swap 应用。
+    //
+    // 没东西要删时清掉旧 marker(否则上次 sync 留下的列表会被 swap 二次处理)。
+    if (!dryRun && writeDir !== targetDir) {
+      const markerPath = join(writeDir, '.pending-delete.json');
+      if (pendingDeleteRels.length > 0) {
+        try {
+          await fs.writeFile(
+            markerPath,
+            JSON.stringify(
+              {
+                rels: [...pendingDeleteRels].sort(),
+                writtenAt: Date.now(),
+              },
+              null,
+              2,
+            ),
+          );
+        } catch (err) {
+          result.warnings.push(`写 .pending-delete.json 失败: ${(err as Error).message}`);
+        }
+      } else {
+        await fs.unlink(markerPath).catch(() => undefined);
       }
     }
 
