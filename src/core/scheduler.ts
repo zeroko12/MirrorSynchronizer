@@ -298,8 +298,16 @@ export class Scheduler {
     this.timer = setTimeout(async () => {
       this.timer = null;
       this.nextRunDelayMs = null;
-      await this.runOnce();
-      // 下次排程由 runOnce 内部根据成功/失败决定(指数退避 vs 正常)
+      try {
+        await this.runOnce();
+        // 下次排程由 runOnce 内部根据成功/失败决定(指数退避 vs 正常)
+      } catch (err) {
+        // runOnce 内部 try/catch 已吃所有错,这里 catch 兜底:
+        // 万一 onSync 抛(stateMgr.update 失败等)→ catch 块再调 onSync 也抛
+        // → 整个 runOnce throw → unhandled promise rejection
+        // 这里兜底,避免 scheduler 周期死 + renderer 永远收不到 sync:result
+        coreLog.error(`[scheduler] 周期 tick 异常被兜底: ${(err as Error).message}`);
+      }
     }, delayMs);
   }
 
