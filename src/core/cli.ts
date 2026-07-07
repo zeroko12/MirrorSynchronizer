@@ -36,7 +36,7 @@ interface CliArgs {
   backupDir?: string;
   interval?: number;
   ignoreItems: string[];
-  applyMode?: 'immediate' | 'staging';
+  applyMode?: 'immediate' | 'staging' | 'immediate-with-precheck';
   stagingDir?: string;
   quiet: boolean;
 }

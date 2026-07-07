@@ -34,6 +34,7 @@ import {
 } from './errors.js';
 import { pickAdapter, streamToFile, isRemotePath, type SourceAdapter } from './adapter.js';
 import { MTIME_JITTER_TOLERANCE_MS } from './constants.js';
+import { preflightTargetFilesWritable } from './preflight-locks.js';
 
 /** 致命错误时是否应中断后续步骤(网络类) */
 function shouldAbortOnError(reason: PathErrorKind | null | undefined): boolean {
@@ -348,6 +349,32 @@ export class Syncer {
       if (sourceMap.has(rel)) continue;
       if (exemptFromMirrorDelete.has(normalize(rel))) continue;
       plannedDeleted.push(rel);
+    }
+
+    // 3.6 applyMode='immediate-with-precheck' 模式:写盘前先探测 target 锁状态
+    //
+    // 任何目标文件被锁 → 整次同步拒绝,弹窗提示用户关闭占用程序。
+    // 比 immediate 更安全(不会半写半失败),比 staging 更简单(无 swap 步骤)。
+    //
+    // 只在非 dryRun 跑(用户既然选了 precheck 模式,周期 dryRun 也按它执行 —
+    //  dryRun 只是为了 UI 展示 fp 而已,真正锁检测等到 force 时跑)。
+    // 实际我们这里也跑 dryRun:用户切换到 precheck 模式后,周期 tick 一次就
+    // 反馈"目标被锁",不浪费一次 force 才发现。
+    if (this.config.applyMode === 'immediate-with-precheck') {
+      const allPlanned = [...plannedAdded, ...plannedModified, ...plannedDeleted];
+      const pre = await preflightTargetFilesWritable(targetDir, allPlanned);
+      if (!pre.ok) {
+        // 锁住 → 整次同步拒绝,不写任何文件
+        const programHint = this.config.executablePath
+          ? `(${this.config.executablePath})`
+          : '(目标程序)';
+        result.fatalError = `目标文件被占用 (${pre.lockedCode}): ${pre.lockedRel}。请关闭占用程序 ${programHint} 后重试,或开启 swap 模式延迟应用。`;
+        result.fatalReason = 'target-locked';
+        result.fatalTarget = 'target';
+        result.warnings.push(result.fatalError);
+        result.durationMs = Date.now() - startedAt;
+        return { result, newSourceIndex: [] };
+      }
     }
 
     // 3.7 创建快照(任一变化都触发:增/改/删)— dryRun 时跳过

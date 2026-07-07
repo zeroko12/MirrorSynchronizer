@@ -127,8 +127,14 @@ export class ConfigManager {
       }
     }
     // applyMode 校验
-    if (config.applyMode !== 'immediate' && config.applyMode !== 'staging') {
-      errors.push(`applyMode 必须是 'immediate' 或 'staging',当前: ${String(config.applyMode)}`);
+    if (
+      config.applyMode !== 'immediate' &&
+      config.applyMode !== 'staging' &&
+      config.applyMode !== 'immediate-with-precheck'
+    ) {
+      errors.push(
+        `applyMode 必须是 'immediate' / 'staging' / 'immediate-with-precheck',当前: ${String(config.applyMode)}`,
+      );
     }
     // executablePath 校验 — 空 = 禁用,非空走跟 ignoreItems 同样的规则
     if (config.executablePath && typeof config.executablePath === 'string' && config.executablePath.trim()) {

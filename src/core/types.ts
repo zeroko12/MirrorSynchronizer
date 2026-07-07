@@ -148,12 +148,18 @@ export interface AppConfig {
   ignoreItems: string[];
   /**
    * 同步应用模式
-   * - 'immediate': 直接写到 targetDir(旧行为,文件被锁会失败)
-   * - 'staging':   写到 stagingDir,swap 时再 mv 到 targetDir(文件锁安全)
+   * - 'immediate':              直接写到 targetDir(旧行为,文件被锁会失败)
+   * - 'staging':                写到 stagingDir,swap 时再 mv 到 targetDir(文件锁安全)
+   * - 'immediate-with-precheck':直接写到 targetDir,但**写之前**先探测 target 锁状态。
+   *                              任何目标文件被锁 → 整次同步拒绝,弹窗提示
+   *                              "X.exe 占用了 Y 文件"。比 immediate 更安全,比 staging 更简单。
    * 默认 'staging'(新行为)。
    * 切换 mode:下次 sync 起生效,无需重启。
+   *
+   * 老部署读到此字段含 'immediate-with-precheck':不识别 → 自动 fallback 到 'immediate'
+   * (见 SettingsView 加载时的迁移处理)。
    */
-  applyMode: 'immediate' | 'staging';
+  applyMode: 'immediate' | 'staging' | 'immediate-with-precheck';
   /**
    * staging 目录绝对路径(applyMode='staging' 时使用)。
    * 空字符串 = 派生自 targetDir:`<targetDir>-staging`

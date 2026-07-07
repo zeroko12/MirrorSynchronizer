@@ -95,7 +95,7 @@ const effectiveStagingDir = computed(() => {
 });
 
 /** 模板里调用的 handlers(模板不能直接赋值 ref.value,需要走方法) */
-function onApplyModeChange(v: 'immediate' | 'staging') {
+function onApplyModeChange(v: 'immediate' | 'staging' | 'immediate-with-precheck') {
   config.value = { ...config.value, applyMode: v };
 }
 function onStagingDirChange(v: string) {
@@ -1040,6 +1040,7 @@ function formatTime(ts: number | null): string {
             <n-radio value="staging">
               <b>staging(推荐)</b>
             </n-radio>
+            <n-radio value="immediate-with-precheck">锁住则拒绝</n-radio>
             <n-radio value="immediate">immediate(旧行为,直接写)</n-radio>
           </n-radio-group>
           <n-text depth="3" style="display: block; margin-top: 8px; font-size: 12px; line-height: 1.6">
@@ -1048,8 +1049,11 @@ function formatTime(ts: number | null): string {
               目标程序退出后自动 swap 到目标。下次 sync 或应用启动时会自动检测 + 应用。
             </div>
             <div>
-              <b>immediate 模式</b>:直接写到 <code>{{ config.targetDir || '(未配置)' }}</code>,
-              遇文件锁会失败,不推荐用于更新正在运行的程序。
+              <b>锁住则拒绝</b>(immediate-with-precheck):直接写到 <code>{{ config.targetDir || '(未配置)' }}</code>,
+              但写之前先探测锁,任何文件被占用 → 整次同步拒绝,只弹窗提示。比 staging 简单,不需要 stagingDir。
+            </div>
+            <div>
+              <b>immediate 模式</b>(旧行为):直接写,遇文件锁会失败,不推荐用于更新正在运行的程序。
             </div>
           </n-text>
         </n-form-item>

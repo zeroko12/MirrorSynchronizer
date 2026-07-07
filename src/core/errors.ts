@@ -22,6 +22,7 @@ export type PathErrorKind =
   | 'busy'               // EBUSY — 单文件/共享被锁(不是网络断)
   | 'permission-denied'  // EACCES / EPERM
   | 'disk-full'          // ENOSPC / EFBIG
+  | 'target-locked'      // applyMode='immediate-with-precheck' 探测到目标文件被锁,整次同步拒绝
   | 'unknown';           // 兜底
 
 /** 致命错误的归属:哪个路径出的问题 */

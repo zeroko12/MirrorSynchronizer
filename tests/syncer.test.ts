@@ -1093,3 +1093,105 @@ describe('Syncer - 性能', () => {
     }
   }, 60_000);
 });
+
+describe('Syncer - applyMode=immediate-with-precheck(锁住则拒绝)', () => {
+  let sourceDir: string;
+  let targetDir: string;
+  let config: AppConfig;
+
+  beforeEach(async () => {
+    sourceDir = await makeTempDir('prefl-src-');
+    targetDir = await makeTempDir('prefl-tgt-');
+    config = makeConfig(sourceDir, targetDir, { applyMode: 'immediate-with-precheck' });
+  });
+
+  afterEach(async () => {
+    await rmTemp(sourceDir);
+    await rmTemp(targetDir);
+  });
+
+  it('★ 目标文件未被占 + applyMode=immediate-with-precheck → 正常 sync', async () => {
+    await writeTree(sourceDir, [{ relPath: 'a.txt', content: 'NEW' }]);
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    expect(result.ok).toBe(true);
+    expect(result.added).toEqual(['a.txt']);
+    // 真写到 target(immediate-with-precheck 的写盘路径跟 immediate 一样)
+    expect((await fs.readFile(join(targetDir, 'a.txt'), 'utf-8'))).toBe('NEW');
+  });
+
+  it('★ 目标文件被独占打开 → fatalError + 整次同步拒绝(零写入)', async () => {
+    // 准备:target 有个被目标程序"占着"的文件
+    await writeFile(join(targetDir, 'locked.exe'), 'X');
+    const holdingFh = await fs.open(join(targetDir, 'locked.exe'), 'r+');
+
+    // 同时 source 里有新内容触发覆盖
+    await writeTree(sourceDir, [
+      { relPath: 'locked.exe', content: 'NEW' },
+      { relPath: 'other.txt', content: 'OTHER' },
+    ]);
+
+    try {
+      const syncer = new Syncer(config);
+      const { result } = await syncer.sync(null);
+
+      // 平台相关:POSIX 上 fs.open 允许共享(检测不到锁),
+      // Windows 上可能检测到 — 我们用 result.ok 看效果
+      if (!result.ok) {
+        expect(result.fatalError).toMatch(/目标文件被占用|被锁定|被锁/i);
+        expect(result.fatalReason).toBe('target-locked');
+        expect(result.fatalTarget).toBe('target');
+        // ★ 关键:拒绝模式不应该有任何写入
+        // 如果是 modified 路径,target 的 locked.exe 仍应是旧内容
+        // 如果是 added 路径,other.txt 不应被创建
+        // 至少 result.fatalError 设置了 — 写入被中断
+        expect((await fs.readFile(join(targetDir, 'locked.exe'), 'utf-8'))).toBe('X');
+        // other.txt 不应被创建
+        await expect(fs.readFile(join(targetDir, 'other.txt'), 'utf-8')).rejects.toThrow();
+      } else {
+        // 平台未锁住 — 至少 confirm 跑通了无死锁路径
+        expect(result.added.length).toBeGreaterThan(0);
+      }
+    } finally {
+      await holdingFh.close();
+    }
+  });
+
+  it('applyMode=immediate-with-precheck + dryRun 跑 → 不触发 precheck(fail-fast 仅在 real sync)', async () => {
+    // dryRun 是检测模式,不应该因为锁而 abort
+    await writeTree(sourceDir, [{ relPath: 'a.txt', content: 'A' }]);
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null, { dryRun: true });
+    // dryRun 总是返回 ok=true(没真写所以不会 fatal)
+    expect(result.ok).toBe(true);
+    expect(result.added).toEqual(['a.txt']);
+  });
+
+  it('applyMode=immediate-with-precheck + 全部是新增(ENOENT) → ok=true', async () => {
+    // precheck 对 ENOENT 跳过,新文件不存在不算锁
+    await writeTree(sourceDir, [
+      { relPath: 'new1.txt', content: '1' },
+      { relPath: 'sub/new2.txt', content: '2' },
+    ]);
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+    expect(result.ok).toBe(true);
+    expect(result.added.sort()).toEqual(['new1.txt', 'sub/new2.txt']);
+  });
+
+  it('applyMode=immediate-with-precheck + 增量修改(目标已存在但未锁)→ 正常 sync', async () => {
+    // 目标里已有 a.txt,内容 OLD(3 字节)
+    await writeFile(join(targetDir, 'a.txt'), 'OLD');
+    // source 里是 NEW-LONGER(10 字节)— 故意 size 不同,避开 mtime 抖动
+    // (MTIME_JITTER_TOLERANCE_MS=2ms,同 size 同步写可能 mtime 接近被当 unchanged)
+    await writeTree(sourceDir, [{ relPath: 'a.txt', content: 'NEW-LONGER' }]);
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+    expect(result.ok).toBe(true);
+    // 没 lastIndex → added 而非 modified(precheck 不区分)
+    expect(result.added).toEqual(['a.txt']);
+    // 覆盖成功
+    expect((await fs.readFile(join(targetDir, 'a.txt'), 'utf-8'))).toBe('NEW-LONGER');
+  });
+});

@@ -16,6 +16,7 @@ export const FATAL_REASON_LABEL: Record<PathErrorKind, string> = {
   'busy': '资源被占用',
   'permission-denied': '权限不足',
   'disk-full': '磁盘空间不足',
+  'target-locked': '目标文件被锁',
   'unknown': '未知错误',
 };
 
@@ -28,6 +29,7 @@ export const FATAL_REASON_ADVICE: Record<PathErrorKind, string> = {
   'busy': '文件或共享被其他进程占用,稍后重试',
   'permission-denied': '当前用户对源路径无读取权限',
   'disk-full': '目标磁盘空间不足,请清理或更换目录',
+  'target-locked': 'applyMode="锁住则拒绝" 检测到目标文件被占用。关闭占用程序后重试,或切换到 staging 模式延迟应用。',
   'unknown': '详见日志(主进程控制台)',
 };
 
