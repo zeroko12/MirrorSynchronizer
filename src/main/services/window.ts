@@ -59,8 +59,25 @@ export function createWindow(): void {
     },
   });
 
-  // 生产环境不自动开 DevTools
-  // mainWindow.webContents.openDevTools({ mode: 'detach' });
+  // DevTools 入口(隐秘:F12 / Ctrl+Shift+I 切显)
+  // 不在启动时自动开 — 用户需要主动调,避免每次启动都弹控制台。
+  // (调试流程:F12 打开 → DevTools Console → Ctrl+F 找元素)
+  mainWindow.webContents.on('before-input-event', (_e, input) => {
+    const isF12 = input.key === 'F12';
+    const isCtrlShiftI =
+      input.type === 'keyDown' &&
+      input.key === 'I' &&
+      input.control &&
+      input.shift;
+    if (isF12 || isCtrlShiftI) {
+      if (!mainWindow) return;
+      if (mainWindow.webContents.isDevToolsOpened()) {
+        mainWindow.webContents.closeDevTools();
+      } else {
+        mainWindow.webContents.openDevTools({ mode: 'detach' });
+      }
+    }
+  });
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show();

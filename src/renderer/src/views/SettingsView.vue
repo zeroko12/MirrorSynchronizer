@@ -22,6 +22,8 @@ import {
   NInput,
   NInputNumber,
   NModal,
+  NRadio,
+  NRadioGroup,
   NSpace,
   NSpin,
   NText,

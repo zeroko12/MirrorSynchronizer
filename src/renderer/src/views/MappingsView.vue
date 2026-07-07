@@ -16,6 +16,7 @@ import {
   NButton,
   NDataTable,
   NTag,
+  NText,
   NSpace,
   NModal,
   NForm,

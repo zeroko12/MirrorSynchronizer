@@ -9,7 +9,9 @@ import { usePolling } from '../composables/usePolling';
 import { UI_LIST_POLL_MS } from '@core/constants';
 import {
   NDataTable,
+  NInputNumber,
   NTag,
+  NText,
   NSpace,
   NButton,
   NEmpty,
