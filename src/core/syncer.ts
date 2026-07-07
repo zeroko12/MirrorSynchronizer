@@ -356,10 +356,8 @@ export class Syncer {
     // 任何目标文件被锁 → 整次同步拒绝,弹窗提示用户关闭占用程序。
     // 比 immediate 更安全(不会半写半失败),比 staging 更简单(无 swap 步骤)。
     //
-    // 只在非 dryRun 跑(用户既然选了 precheck 模式,周期 dryRun 也按它执行 —
-    //  dryRun 只是为了 UI 展示 fp 而已,真正锁检测等到 force 时跑)。
-    // 实际我们这里也跑 dryRun:用户切换到 precheck 模式后,周期 tick 一次就
-    // 反馈"目标被锁",不浪费一次 force 才发现。
+    // 关键:失败时仍然把 planned 写入 result.added/modified/deleted,
+    // 让 UI 弹窗知道"有哪些变化没同步"(避免弹窗内容为空看起来像 no-changes)。
     if (this.config.applyMode === 'immediate-with-precheck') {
       const allPlanned = [...plannedAdded, ...plannedModified, ...plannedDeleted];
       const pre = await preflightTargetFilesWritable(targetDir, allPlanned);
@@ -368,6 +366,10 @@ export class Syncer {
         const programHint = this.config.executablePath
           ? `(${this.config.executablePath})`
           : '(目标程序)';
+        // ★ 关键:把 planned 写进 result(否则弹窗看不到有哪些变化)
+        result.added = plannedAdded.slice();
+        result.modified = plannedModified.slice();
+        result.deleted = plannedDeleted.slice();
         result.fatalError = `目标文件被占用 (${pre.lockedCode}): ${pre.lockedRel}。请关闭占用程序 ${programHint} 后重试,或开启 swap 模式延迟应用。`;
         result.fatalReason = 'target-locked';
         result.fatalTarget = 'target';

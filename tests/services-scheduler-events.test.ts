@@ -235,3 +235,98 @@ describe('handlePopupDecision — 弹窗去重', () => {
     expect((await stateMgr.load()).lastShownChangeHash).toBe(fp.hash);
   });
 });
+
+describe('handlePopupDecision — target-locked(precheck 失败)路径', () => {
+  let statePath: string;
+  let stateMgr: StateManager;
+  let mockWin: ReturnType<typeof makeMockWindow>;
+
+  beforeEach(async () => {
+    const dir = await makeTempDir('lpd-state-');
+    statePath = `${dir}/state.json`;
+    stateMgr = new StateManager(statePath);
+    await stateMgr.load();
+    mockWin = makeMockWindow();
+    _resetPopupDedupForTests();
+  });
+
+  function makeLockedResult(): SyncResult {
+    return {
+      startedAt: 0,
+      durationMs: 0,
+      ok: false,
+      added: ['a.txt'],
+      modified: [],
+      deleted: [],
+      mappingCopied: [],
+      mappingSkippedExisting: [],
+      mappingSkipped: [],
+      unchanged: 0,
+      warnings: ['目标文件被占用 (EBUSY): a.txt。请关闭占用程序 (Game/MyGame.exe) 后重试,或开启 swap 模式延迟应用。'],
+      backupCreated: false,
+      fatalError: '目标文件被占用 (EBUSY): a.txt',
+      fatalReason: 'target-locked',
+      fatalTarget: 'target',
+    };
+  }
+
+  // ★ 关键回归:precheck 失败时,即使之前 lastShownChangeHash 已设,
+  //   也要重置成 null,这样用户解锁后下次检测还能再弹窗确认(用户还没决策呢)
+  it('★ target-locked 路径:重置 lastShownChangeHash → 下次 dryRun 还能再弹', async () => {
+    // 模拟:之前已经弹过一次普通 popup,lastShownChangeHash=A
+    await stateMgr.update({ lastShownChangeHash: 'prev-fp-A' });
+    expect((await stateMgr.load()).lastShownChangeHash).toBe('prev-fp-A');
+
+    // 现在 precheck 失败,result.fatalReason='target-locked'
+    const r = makeLockedResult();
+    await handlePopupDecision(r, stateMgr, () => mockWin.win);
+
+    // ★ lastShownChangeHash 被重置(null)— 这样下次 fp 不管相同还是不同,都能再弹
+    expect((await stateMgr.load()).lastShownChangeHash).toBeNull();
+  });
+
+  it('★ target-locked 路径:发 IPC 带 lockedRel + lockedCode', async () => {
+    const r = makeLockedResult();
+    await handlePopupDecision(r, stateMgr, () => mockWin.win);
+    const sent = mockWin.sent.find((s) => s.channel === 'update:prompt');
+    expect(sent).toBeTruthy();
+    expect(sent!.payload['lockedRel']).toBe('a.txt');
+    expect(sent!.payload['lockedCode']).toBe('EBUSY');
+  });
+
+  it('★ target-locked 路径:result.added 透传到 payload(用户能看到哪些变化未同步)', async () => {
+    const r = makeLockedResult();
+    await handlePopupDecision(r, stateMgr, () => mockWin.win);
+    const sent = mockWin.sent.find((s) => s.channel === 'update:prompt');
+    expect(sent!.payload['addedCount']).toBe(1);
+    expect(sent!.payload['hash']).toBeTruthy();
+  });
+
+  it('target-locked 路径:不走 decide() 的 silent 分支(强制弹窗,即使 fp 跟 lastShown 一致)', async () => {
+    // 模拟"上一次的 fp 等于这次的 fp"(同 diff):普通路径会 silently dedup,
+    // 但 target-locked 必须走 — 用户没确认,不能沉默
+    const r = makeLockedResult();
+    const fp = computeFingerprint(r);
+    await stateMgr.update({ lastShownChangeHash: fp.hash });
+
+    await handlePopupDecision(r, stateMgr, () => mockWin.win);
+    const sent = mockWin.sent.find((s) => s.channel === 'update:prompt');
+    expect(sent).toBeTruthy(); // 仍然弹
+    // 而且 lastShownChangeHash 被重置(不会基于 fp 复用)
+    expect((await stateMgr.load()).lastShownChangeHash).toBeNull();
+  });
+
+  it('target-locked 路径:窗口已销毁 → IPC 不发,但 state 仍重置(下次检测还能再弹)', async () => {
+    const r = makeLockedResult();
+    const deadWin = {
+      isDestroyed: () => true,
+      show: () => undefined,
+      focus: () => undefined,
+      webContents: { send: vi.fn() },
+    };
+    await handlePopupDecision(r, stateMgr, () => deadWin as unknown as import('electron').BrowserWindow);
+    expect(deadWin.webContents.send).not.toHaveBeenCalled();
+    // state 仍要重置 — 否则下次 sync 还会被 dedup 吞
+    expect((await stateMgr.load()).lastShownChangeHash).toBeNull();
+  });
+});

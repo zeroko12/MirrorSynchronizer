@@ -29,6 +29,13 @@ export interface PromptData {
   deletedCount: number;
   isLocked: boolean;
   lockSnapshotTimestamp: string | null;
+  /**
+   * applyMode='immediate-with-precheck' 时被锁的目标文件 relPath。
+   * null = 不是锁定场景(普通新变化 / post-rollback lock)。
+   */
+  lockedRel: string | null;
+  /** 锁定的 OS 错误码(EBUSY/EPERM/EACCES),null 同上 */
+  lockedCode: string | null;
 }
 
 const snoozeLabel = `${SNOOZE_DURATION_MS / 60_000} 分钟后再问`;
@@ -118,6 +125,17 @@ defineExpose({ showPrompt });
         <span class="lock-icon">🔒</span>
         已回退到 <b>{{ promptData.lockSnapshotTimestamp }}</b>,目标处于"回退锁"状态
       </div>
+      <!--
+        applyMode='immediate-with-precheck' 时:目标被锁定
+        (注意:与 isLocked(回退锁)不同 — 这不是回退场景,只是被其他程序占着文件)
+      -->
+      <div v-else-if="promptData.lockedRel" class="lock-warning" data-testid="preflight-locked-warning">
+        <span class="lock-icon">⛔</span>
+        目标文件 <code>{{ promptData.lockedRel }}</code> 被占用
+        <n-text v-if="promptData.lockedCode" depth="3" style="margin-left: 8px; font-size: 12px">
+          ({{ promptData.lockedCode }})
+        </n-text>
+      </div>
       <n-text depth="3">源目录检测到以下变更:</n-text>
 
       <div class="changes">
@@ -138,6 +156,10 @@ defineExpose({ showPrompt });
       <n-text v-if="promptData.isLocked" depth="3" style="font-size: 13px">
         已回退锁开启。应用新变更后,锁自动解除,目标内容将被覆盖为最新状态。
       </n-text>
+      <n-text v-else-if="promptData.lockedRel" depth="3" style="display: block; margin-top: 8px; font-size: 13px; color: #d03050">
+        请先<strong>关闭占用该文件的程序</strong>(<code>{{ promptData.lockedRel }}</code>),
+        然后点击下方"重试同步"再次发起同步。
+      </n-text>
 
       <div class="actions">
         <n-button
@@ -145,15 +167,19 @@ defineExpose({ showPrompt });
           :loading="deciding"
           @click="onApply"
         >
-          {{ promptData.isLocked ? '应用新变更(解锁)' : '立即同步' }}
+          {{ promptData.isLocked
+              ? '应用新变更(解锁)'
+              : promptData.lockedRel ? '重试同步' : '立即同步' }}
         </n-button>
         <n-button
+          v-if="!promptData.lockedRel"
           :loading="deciding"
           @click="onSnooze"
         >
           {{ snoozeLabel }}
         </n-button>
         <n-button
+          v-if="!promptData.lockedRel"
           :loading="deciding"
           @click="onIgnore"
         >

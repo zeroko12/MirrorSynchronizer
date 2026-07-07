@@ -137,6 +137,14 @@ export interface UpdatePromptPayload {
   /** 是否处于回退后的锁定状态 */
   isLocked: boolean;
   lockSnapshotTimestamp: string | null;
+  /**
+   * applyMode='immediate-with-precheck' 时目标被锁定的具体文件
+   * (applyMode='staging' 模式下此字段为 null)
+   * UI 据此切到 "locked" 弹窗样式,显示哪个文件占着
+   */
+  lockedRel: string | null;
+  /** 锁定的 OS 错误码(EBUSY/EPERM/EACCES) */
+  lockedCode: string | null;
 }
 
 export type UserDecideAction = 'apply' | 'snooze' | 'ignore';

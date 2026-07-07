@@ -18,7 +18,7 @@ import { Scheduler } from '@core/scheduler';
 import { StateManager } from '@core/state';
 import { HistoryDB } from '@core/history';
 import { statDir } from '@core/backupper';
-import { decide } from '@core/detector';
+import { decide, computeFingerprint } from '@core/detector';
 import { APP_DISPLAY_NAME } from '@core/constants';
 import { mainLog } from '@core/logger';
 import type { AppConfig, SyncResult } from '@core/types';
@@ -163,6 +163,42 @@ export async function handlePopupDecision(
 ): Promise<void> {
   if (!stateMgr) return;
   const state = await stateMgr.load();
+
+  // ★ 特殊路径:applyMode='immediate-with-precheck' 时目标被锁
+  // 与常规"新变化"流程不同:
+  // 1. 重置 lastShownChangeHash → 下次 dryRun 还能再弹(用户没确认呢)
+  // 2. 不用 decide() 走 silent 分支 — 强制弹窗,带 lockedRel/lockedCode
+  // 3. 也不写 hash 进 state(因为我们刚 reset 了)
+  if (r.fatalReason === 'target-locked') {
+    const lockedRel = r.warnings
+      .map((w) => /目标文件被占用 \(([A-Z]+)\): ([^\s。]+)/.exec(w)?.[2])
+      .find((x): x is string => !!x) ?? null;
+    const lockedCode = r.warnings
+      .map((w) => /目标文件被占用 \(([A-Z]+)\):/.exec(w)?.[1])
+      .find((x): x is string => !!x) ?? null;
+    log.info(`[decide] target-locked: rel=${lockedRel} code=${lockedCode}`);
+    // 关键:重置已展示 hash,让用户解锁程序后下次检测还能再弹
+    try {
+      await stateMgr.update({ lastShownChangeHash: null });
+    } catch (err) {
+      log.warn(`[decide] 重置 lastShownChangeHash 失败: ${(err as Error).message}`);
+    }
+    // 推"locked" prompt 到 renderer
+    const fp = computeFingerprint(r);
+    const w = getMainWindow();
+    if (!w || w.isDestroyed()) return;
+    w.webContents.send('update:prompt', {
+      ...fp,
+      isLocked: false, // 不是 post-rollback lock
+      lockSnapshotTimestamp: state.postRollbackLock?.snapshotTimestamp ?? null,
+      lockedRel,
+      lockedCode,
+    });
+    w.show();
+    w.focus();
+    return;
+  }
+
   const decision = decide({
     result: r,
     lastShownChangeHash: state.lastShownChangeHash,
