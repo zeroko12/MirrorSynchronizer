@@ -13,6 +13,7 @@
 
 import { Scheduler } from '@core/scheduler';
 import { StateManager } from '@core/state';
+import type { SyncResult } from '@core/types';
 import { mainLog } from '@core/logger';
 import { SNOOZE_DURATION_MS } from '@core/constants';
 
@@ -25,8 +26,8 @@ export async function handleUserDecision(
   scheduler: Scheduler | null,
   action: UserDecideAction,
   hash: string,
-): Promise<void> {
-  if (!stateMgr) return;
+): Promise<{ result: SyncResult | null; state: Awaited<ReturnType<StateManager['load']>> | null }> {
+  if (!stateMgr) return { result: null, state: null };
   const state = await stateMgr.load();
 
   switch (action) {
@@ -35,24 +36,26 @@ export async function handleUserDecision(
       // 注意:这里不写 lastShownChangeHash — 等 sync 跑完后再写"新的 fp"
       // 否则会出现:apply 没成功落地 → 同样 fp 已被 hash 吃掉 → 下次 sync 静默
       // (用户感受:"我点了应用但啥都没发生,下次还不弹框")
-      if (scheduler) {
-        // 已回退锁 → 先解锁
-        if (state.postRollbackLock) {
-          await stateMgr.update({ postRollbackLock: null });
-          log.info('[decide] 回退锁已解除');
-        }
-        scheduler.setDryRunMode(false);
-        // 传 force=true:让 runNow 等 in-flight 完成(用户主动 apply 不该被吞),
-        // 同时 launch 守卫会启用 → apply 成功 + 配了 executablePath 才启动
-        const result = await scheduler.runNow({ force: true });
-        scheduler.setDryRunMode(state.popupEnabled);
-        if (result?.ok) {
-          log.info('[decide] 用户决定应用,同步成功');
-        } else {
-          log.error('[decide] 用户决定应用,但同步失败');
-        }
+      if (!scheduler) return { result: null, state };
+      // 已回退锁 → 先解锁
+      if (state.postRollbackLock) {
+        await stateMgr.update({ postRollbackLock: null });
+        log.info('[decide] 回退锁已解除');
       }
-      break;
+      scheduler.setDryRunMode(false);
+      // 传 force=true:让 runNow 等 in-flight 完成(用户主动 apply 不该被吞),
+      // 同时 launch 守卫会启用 → apply 成功 + 配了 executablePath 才启动
+      const result = await scheduler.runNow({ force: true });
+      scheduler.setDryRunMode(state.popupEnabled);
+      if (result?.ok) {
+        log.info('[decide] 用户决定应用,同步成功');
+      } else {
+        // ★ 重要:让 IPC handler 知道结果(否则它返回 {ok:true},渲染端误报"已同步")
+        log.error(
+          `[decide] 用户决定应用,但同步失败:${result?.fatalError ?? result?.fatalReason ?? '未知'}`,
+        );
+      }
+      return { result, state };
     }
     case 'snooze': {
       // "稍后再问" → 暂休 SNOOZE_DURATION_MS 毫秒,且把当前 hash 记下做兜底
@@ -61,13 +64,13 @@ export async function handleUserDecision(
         lastShownChangeHash: hash,
       });
       log.info(`[decide] 用户暂休 ${SNOOZE_DURATION_MS / 1000}s`);
-      break;
+      return { result: null, state };
     }
     case 'ignore': {
       // "忽略本次" → 标记为已读,不实际同步
       await stateMgr.update({ lastShownChangeHash: hash });
       log.info('[decide] 用户忽略本次');
-      break;
+      return { result: null, state };
     }
   }
 }

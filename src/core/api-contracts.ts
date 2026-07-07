@@ -151,6 +151,15 @@ export type UserDecideAction = 'apply' | 'snooze' | 'ignore';
 export interface UserDecideResult {
   ok: boolean;
   error?: string;
+  /**
+   * sync 失败时的语义化错误类别(可选)
+   * - 'target-locked': applyMode='immediate-with-precheck' 探测到目标被锁
+   * 渲染端可以基于这个区分错误提示(比如锁场景不应弹"操作失败"通用 toast,
+   * 已有 locked 弹窗通过 update:prompt 推回来)
+   */
+  fatalReason?: string | null;
+  /** sync 失败的原始错误消息(可选) */
+  fatalError?: string | null;
 }
 
 /* ============================ 运行时状态(popup / 暂休 / 回退锁) ============================ */

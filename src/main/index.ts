@@ -410,19 +410,27 @@ function registerIpc(): void {
   ipcMain.handle('user:decide', async (_e, action: 'apply' | 'snooze' | 'ignore', hash: string) => {
     const DECIDE_TIMEOUT_MS = 30_000;
     try {
-      await Promise.race([
+      const { result } = await Promise.race([
         handleUserDecision(stateMgr, scheduler, action, hash),
-        new Promise<void>((_, reject) =>
+        new Promise<{ result: null; state: null }>((_, reject) =>
           setTimeout(
             () => reject(new Error(`user:decide 超时 ${DECIDE_TIMEOUT_MS / 1000}s,sync 可能卡住`)),
             DECIDE_TIMEOUT_MS,
           ),
         ),
       ]);
-      return { ok: true };
+      // ★ 关键:把 sync 真实结果透传给渲染端
+      // 之前返 {ok:true} 不管 sync 成败 → 用户在锁住场景下点"重试同步"看到
+      // "已同步"提示,实际啥都没动。
+      // 现在:result.ok=true → 渲染端弹"已同步";result.ok=false → 弹"同步失败"
+      //   (失败时 handlePopupDecision 已经通过 update:prompt 把 locked 弹窗推回来了)
+      return {
+        ok: result?.ok === true,
+        fatalReason: result?.fatalReason ?? null,
+        fatalError: result?.fatalError ?? null,
+      };
     } catch (err) {
       log.error(`[user:decide] ${(err as Error).message}`);
-      // 即便超时/出错,也返回 ok 让渲染端关弹窗;真正问题由日志和 toast 体现
       return { ok: false, error: (err as Error).message };
     }
   });

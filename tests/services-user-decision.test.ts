@@ -104,6 +104,67 @@ describe('user-decision', () => {
       expect(state.postRollbackLock).toBeNull();
     });
 
+    // ★ 回归:apply 路径必须把 sync 真实结果透传(不能总返 {ok:true})
+    // 之前:user:decide IPC 总是返 {ok:true} → 渲染端看到"已同步"成功 toast
+    //   即使 target 仍然被锁
+    // 现在:handleUserDecision 返 {result, state} → IPC handler 读 result.ok
+    it('apply + sync 成功 → 返 result.ok=true', async () => {
+      const successResult = {
+        startedAt: 0,
+        durationMs: 0,
+        ok: true,
+        added: ['a.txt'],
+        modified: [],
+        deleted: [],
+        mappingCopied: [],
+        mappingSkippedExisting: [],
+        mappingSkipped: [],
+        unchanged: 0,
+        warnings: [],
+        backupCreated: false,
+      };
+      vi.spyOn(scheduler!, 'runNow').mockResolvedValue(successResult as any);
+      const ret = await handleUserDecision(stateMgr, scheduler, 'apply', 'hash-ok');
+      expect(ret.result?.ok).toBe(true);
+    });
+
+    it('apply + precheck 锁失败 → 返 result.ok=false + fatalReason=target-locked', async () => {
+      // 模拟 applyMode='immediate-with-precheck' 锁住
+      const lockedResult = {
+        startedAt: 0,
+        durationMs: 0,
+        ok: false,
+        added: ['a.txt'],
+        modified: [],
+        deleted: [],
+        mappingCopied: [],
+        mappingSkippedExisting: [],
+        mappingSkipped: [],
+        unchanged: 0,
+        warnings: ['目标文件被占用 (EBUSY): a.txt。...'],
+        backupCreated: false,
+        fatalError: '目标文件被占用 (EBUSY): a.txt',
+        fatalReason: 'target-locked',
+        fatalTarget: 'target',
+      };
+      vi.spyOn(scheduler!, 'runNow').mockResolvedValue(lockedResult as any);
+      const ret = await handleUserDecision(stateMgr, scheduler, 'apply', 'hash-locked');
+      expect(ret.result?.ok).toBe(false);
+      expect(ret.result?.fatalReason).toBe('target-locked');
+    });
+
+    it('apply + scheduler=null → 返 result=null(无 sync 跑过)', async () => {
+      // scheduler 是 null,无法跑 sync
+      const ret = await handleUserDecision(stateMgr, null, 'apply', 'hash-noop');
+      expect(ret.result).toBeNull();
+    });
+
+    it('apply + runNow 返 null → 返 result=null(无错误,但也无 ok)', async () => {
+      vi.spyOn(scheduler!, 'runNow').mockResolvedValue(null);
+      const ret = await handleUserDecision(stateMgr, scheduler, 'apply', 'hash-null');
+      expect(ret.result).toBeNull();
+    });
+
     // ★ 回归:apply 不再"提前"写 lastShownChangeHash
     // 之前:handleUserDecision('apply', hash) 在调用 runNow() 之前就写 hash
     //       → sync 真正落地后如果 fp 没变 → 已被 hash 吃掉 → 下次 sync 静默 already-shown
@@ -119,8 +180,9 @@ describe('user-decision', () => {
   });
 
   describe('null 依赖', () => {
-    it('stateMgr 为 null → 不抛', async () => {
-      await expect(handleUserDecision(null, null, 'snooze', 'h')).resolves.toBeUndefined();
+    it('stateMgr 为 null → 不抛,返 null result', async () => {
+      const ret = await handleUserDecision(null, null, 'snooze', 'h');
+      expect(ret).toEqual({ result: null, state: null });
     });
 
     it('scheduler 为 null + snooze → 仍更新 state', async () => {

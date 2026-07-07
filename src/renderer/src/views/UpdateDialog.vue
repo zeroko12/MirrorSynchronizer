@@ -70,7 +70,16 @@ async function onApply() {
     if (res.ok) {
       message.success(promptData.value!.isLocked ? '已应用新变更并解锁' : '已同步');
     } else {
-      message.error(res.error ?? '操作失败');
+      // ★ 关键修复:之前 IPC 总是返 ok=true,导致锁场景下点"重试同步"也报"已同步"
+      // 现在 IPC 透传 sync result.ok,失败时正确报"操作失败"
+      //
+      // 但:target-locked 场景下,main 进程已经通过 update:prompt 把 locked 弹窗
+      // 推回来了,不要重复 toast 干扰
+      if (res.fatalReason === 'target-locked') {
+        // 静默 — locked 弹窗会自己回来
+      } else {
+        message.error(res.error ?? '同步失败');
+      }
     }
   } catch (err) {
     // IPC 抛错(scheduler 卡住、网络断开、超时)— 用户至少要看到"失败"提示
