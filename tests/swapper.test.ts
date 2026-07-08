@@ -496,10 +496,11 @@ describe('Swapper - target writability pre-flight', () => {
       { relPath: '.pending-apply', content: '' },
       { relPath: 'a.txt', content: 'new' },
     ]);
-    // 任何平台都会失败的路径:Linux /proc 不可写,Windows 不存在的盘符
-    const badTarget = process.platform === 'win32'
-      ? 'C:\__no_such_XYZ_drive__\sub	arget'
-      : '/proc/__definitely_not_a_path_XYZ__/sub/target';
+    // ★ 跨平台可靠的 fail-fast 路径:路径含 NUL 字符
+    //   任何 OS 的 fs 操作(NUL 字符在路径上是非法的)会立即抛错,不会挂起
+    //   之前用 /proc/__xyz__/sub/target 在 Linux 上 fs.mkdir 可能在虚拟文件系统上挂起
+    //   导致 CI timeout (本地 Windows admin 跑得通是因为 chmod 不生效但 NUL path 也 fail-fast)
+    const badTarget = '\0invalid';
     const r = await applyPending({
       targetDir: badTarget,
       stagingDir,
@@ -507,7 +508,9 @@ describe('Swapper - target writability pre-flight', () => {
       backupCount: 0,
     });
     expect(r.ok).toBe(false);
-    expect(r.fatalError ?? r.warnings.join('|')).toMatch(/不可访问|不可写|ENOENT|EACCES|EPERM|EINVAL|EROFS/i);
+    expect(r.fatalError ?? r.warnings.join('|')).toMatch(
+      /不可访问|不可写|ENOENT|EACCES|EPERM|EINVAL|EROFS|invalid|Invalid/i,
+    );
     expect(r.warnings.some((w) => w.includes('检查目标路径'))).toBe(true);
   });
 
