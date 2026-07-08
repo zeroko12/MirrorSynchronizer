@@ -1195,3 +1195,147 @@ describe('Syncer - applyMode=immediate-with-precheck(锁住则拒绝)', () => {
     expect((await fs.readFile(join(targetDir, 'a.txt'), 'utf-8'))).toBe('NEW-LONGER');
   });
 });
+
+describe('Syncer - 映射拷贝失败 (mappingFailed + 详细错误)', () => {
+  let sourceDir: string;
+  let targetDir: string;
+  let localDir: string;
+  let config: AppConfig;
+
+  beforeEach(async () => {
+    sourceDir = await makeTempDir('mf-src-');
+    targetDir = await makeTempDir('mf-tgt-');
+    localDir = await makeTempDir('mf-local-');
+    config = makeConfig(sourceDir, targetDir);
+  });
+  afterEach(async () => {
+    await rmTemp(sourceDir);
+    await rmTemp(targetDir);
+    await rmTemp(localDir);
+  });
+
+  // ★ 关键回归:之前 copyFail 也推 mappingCopied,UI 误以为成功
+  // 现在:copyFail 推 mappingFailed,带 errno + 修复建议
+  it('映射源文件不存在 → 推 mappingSkipped,不带 mappingFailed', async () => {
+    config.fileMappings = [
+      {
+        id: '1', name: 'missing',
+        sourcePath: join(localDir, 'does-not-exist.ini'),
+        targetRelpath: 'config/missing.ini',
+        enabled: true, overwrite: true, ifSourceMissing: 'skip',
+      },
+    ];
+    const syncer = new Syncer(config);
+    const result = await syncer.applyMappingsOnly();
+    expect(result.ok).toBe(true);
+    expect(result.mappingCopied).toEqual([]);
+    expect(result.mappingSkipped).toEqual(['missing']);
+    expect(result.mappingFailed ?? []).toEqual([]);
+  });
+
+  it('映射源路径是个目录(不是文件)→ ifSourceMissing=skip,源"非文件"被 skipped', async () => {
+    // 创建一个目录但不是文件 → 拷贝会被拒绝
+    const dirPath = join(localDir, 'subdir');
+    await fs.mkdir(dirPath, { recursive: true });
+    config.fileMappings = [
+      {
+        id: '1', name: 'isDir',
+        sourcePath: dirPath,
+        targetRelpath: 'config/dir.ini',
+        enabled: true, overwrite: true, ifSourceMissing: 'skip',
+      },
+    ];
+    const syncer = new Syncer(config);
+    const result = await syncer.applyMappingsOnly();
+    expect(result.ok).toBe(true);
+    // 文件源检查是 st.isFile() = false → 当作源不存在 → skipped
+    expect(result.mappingSkipped).toEqual(['isDir']);
+    expect(result.mappingFailed ?? []).toEqual([]);
+  });
+});
+
+describe('Syncer - 映射目标目录下的文件不参与镜像删除', () => {
+  let sourceDir: string;
+  let targetDir: string;
+  let localDir: string;
+  let config: AppConfig;
+
+  beforeEach(async () => {
+    sourceDir = await makeTempDir('mt-src-');
+    targetDir = await makeTempDir('mt-tgt-');
+    localDir = await makeTempDir('mt-local-');
+    config = makeConfig(sourceDir, targetDir);
+  });
+  afterEach(async () => {
+    await rmTemp(sourceDir);
+    await rmTemp(targetDir);
+    await rmTemp(localDir);
+  });
+
+  // ★ 用户报告:映射 data/template.ini 后,target/data/ 下的 user-config.ini
+  //   不该被镜像删(用户手动加的)
+  // 之前:exemptFromMirrorDelete 只豁免 exact path → data/user-config.ini 会被删
+  // 现在:prefix 豁免 → data/ 下所有文件都不参与 sync 删除判断
+  it('★ 映射目标目录下的文件 → 不进镜像删除(即便 source 没有)', async () => {
+    // 映射到 target/data/template.ini
+    await writeFile(join(localDir, 'template.ini'), 'TEMPLATE');
+    config.fileMappings = [
+      {
+        id: '1', name: 'template',
+        sourcePath: join(localDir, 'template.ini'),
+        targetRelpath: 'data/template.ini',
+        enabled: true, overwrite: true, ifSourceMissing: 'skip',
+      },
+    ];
+
+    // 模拟映射已经完成 + 用户在 target/data/ 加了文件
+    await writeTree(targetDir, [
+      { relPath: 'data/template.ini', content: 'MAPPED' },
+      { relPath: 'data/user-config.ini', content: 'USER-ADDED' },  // 用户的
+      { relPath: 'data/notes.md', content: 'NOTES' },  // 用户的
+    ]);
+
+    // source 里只有 a.txt(没 data/* 任何文件)
+    await writeTree(sourceDir, [{ relPath: 'a.txt', content: 'A' }]);
+
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    // 关键:result.deleted 不应包含 data/ 下的任何文件
+    expect(result.deleted.filter((d) => d.startsWith('data/'))).toEqual([]);
+    // a.txt 是正常的新增
+    expect(result.added).toEqual(['a.txt']);
+    // data/template.ini 也不算 modified(在 target,源没)
+    // data/user-config.ini 也不算(豁免)
+    // 全部:result.ok = true,没有 false-positive 删除
+    expect(result.ok).toBe(true);
+  });
+
+  it('映射目标是文件,但 target 里同目录有其他文件 → 也不删', async () => {
+    // 映射 data/single.ini
+    await writeFile(join(localDir, 'template.ini'), 'T');
+    config.fileMappings = [
+      {
+        id: '1', name: 't',
+        sourcePath: join(localDir, 'template.ini'),
+        targetRelpath: 'data/single.ini',
+        enabled: true, overwrite: true, ifSourceMissing: 'skip',
+      },
+    ];
+
+    // target 里 data/ 下有 3 个文件
+    await writeTree(targetDir, [
+      { relPath: 'data/single.ini', content: 'M' },
+      { relPath: 'data/extra1.ini', content: 'X1' },
+      { relPath: 'data/extra2.txt', content: 'X2' },
+    ]);
+
+    // source 空(没 a.txt,啥都没)
+    const syncer = new Syncer(config);
+    const { result } = await syncer.sync(null);
+
+    // data/ 下所有文件都不应被镜像删
+    expect(result.deleted.filter((d) => d.startsWith('data/'))).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+});

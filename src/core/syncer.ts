@@ -146,6 +146,7 @@ export class Syncer {
       mappingCopied: [],
       mappingSkippedExisting: [],
       mappingSkipped: [],
+      mappingFailed: [],
       unchanged: 0,
       warnings: [],
       backupCreated: false,
@@ -230,6 +231,7 @@ export class Syncer {
       mappingCopied: [],
       mappingSkippedExisting: [],
       mappingSkipped: [],
+      mappingFailed: [],
       unchanged: 0,
       warnings: [],
       backupCreated: false,
@@ -326,7 +328,31 @@ export class Syncer {
     }
 
     // 3.5b 镜像删除豁免集 = 映射目标 ∪ ignoreItems(忽略目录里的"孤儿"也不该被镜像删)
+    // ignoreItems 用 prefix 匹配(见 types.isInIgnoredItem),
+    // 但 mappedTargetPaths 需要在判断时 prefix 匹配:
+    // 映射 `data/template.ini` → target/data/template.ini 时,target/data/ 下的所有文件
+    // (用户手动加的 config.ini 之类)都不该被镜像误删
     const exemptFromMirrorDelete = new Set<string>([...mappedTargetPaths, ...ignoreItems]);
+
+    /**
+     * 判断 rel 是否在映射目标所在目录的子树下
+     * 例:映射 `data/template.ini` → 整个 `data/` 子树豁免
+     *   → `data/user-config.ini` 不会进镜像删除
+     */
+    const isUnderMappingTarget = (rel: string): boolean => {
+      const norm = normalize(rel);
+      for (const target of mappedTargetPaths) {
+        // 取映射目标的父目录作为豁免根
+        // mapping target = "data/template.ini" → parent = "data" → 豁免 "data" 下所有
+        const parent = dirname(target);
+        if (parent && parent !== '.' && (norm === parent || norm.startsWith(parent + '/'))) {
+          return true;
+        }
+        // 也包括映射目标本身(防止 resolveMappingRelPath 边界 case)
+        if (norm === target) return true;
+      }
+      return false;
+    };
 
     // 3.6 先预算本次会改/删/加哪些文件(不实际执行)
     //    有任一变化就建备份(只为了"无变化"场景省空间)
@@ -348,6 +374,7 @@ export class Syncer {
     for (const [rel] of targetMap) {
       if (sourceMap.has(rel)) continue;
       if (exemptFromMirrorDelete.has(normalize(rel))) continue;
+      if (isUnderMappingTarget(rel)) continue; // 映射目标目录下的文件不参与同步删除判断
       plannedDeleted.push(rel);
     }
 
@@ -486,7 +513,8 @@ export class Syncer {
     const pendingDeleteRels: string[] = [];
     for (const [rel] of targetMap) {
       if (sourceMap.has(rel)) continue; // 源里有,肯定不删
-      if (exemptFromMirrorDelete.has(normalize(rel))) continue; // 映射目标 / 忽略目录,豁免
+      if (exemptFromMirrorDelete.has(normalize(rel))) continue; // 忽略目录,豁免
+      if (isUnderMappingTarget(rel)) continue; // 映射目标目录下的文件不参与同步删除判断
       // 无论 dryRun 还是 real 都记录 — 用户能看到 "-1 删除"
       result.deleted.push(rel);
       if (dryRun) continue;
@@ -715,7 +743,7 @@ export class Syncer {
     }
 
     // 3. 源存在 → 拷贝(dryRun 只记录)
-    result.mappingCopied.push(mapping.name);
+    let copyOk = true;
     if (!dryRun) {
       try {
         await fs.mkdir(dirname(targetPath), { recursive: true });
@@ -735,15 +763,34 @@ export class Syncer {
           coreLog.info(`[mapping] ${mapping.name}: 已拷贝到 ${targetPath}`);
         }
       } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        const reason = classifyErrno(code, mapping.sourcePath);
-        coreLog.error(`[mapping] ${mapping.name}: 拷贝失败 ${reason ?? (err as Error).message}`);
+        copyOk = false;
+        const e = err as NodeJS.ErrnoException;
+        const code = e.code ?? 'UNKNOWN';
+        coreLog.error(
+          `[mapping] ${mapping.name}: 拷贝失败 (errno=${code}) ` +
+          `src=${mapping.sourcePath} → ${targetPath}: ${e.message}`,
+        );
+        // ★ 详细警告:errno + 源/目标路径 + 修复建议(用户能直接看懂怎么修)
+        const hint =
+          code === 'EACCES' || code === 'EPERM'
+            ? '检查目标目录写权限 / 源文件读权限 / 是否有防病毒占用'
+            : code === 'ENOSPC'
+              ? '目标磁盘空间不足'
+              : code === 'ENOENT'
+                ? '源文件不存在或目标父目录缺失'
+                : '查看主进程日志';
         result.warnings.push(
-          `映射拷贝失败: ${mapping.name} (${reason ?? (err as Error).message})`,
+          `映射拷贝失败: ${mapping.name} (${code}: ${e.message}) src=${mapping.sourcePath} → ${targetPath}。${hint}`,
         );
       }
     } else {
       coreLog.info(`[mapping] ${mapping.name}: dryRun 跳过实际拷贝`);
+    }
+    if (copyOk) {
+      result.mappingCopied.push(mapping.name);
+    } else {
+      // ★ 关键:之前 copyFail 也推 mappingCopied,UI 误以为成功 — 现在改推 mappingFailed
+      result.mappingFailed.push(mapping.name);
     }
   }
 }

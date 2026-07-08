@@ -46,6 +46,8 @@ export interface SyncResult {
   mappingSkippedExisting: string[];
   /** 文件映射规则:跳过的(源文件不存在) */
   mappingSkipped: string[];
+  /** 文件映射规则:拷贝失败的(permission denied / disk full 等) */
+  mappingFailed: string[];
   /** 跳过的(无变化) */
   unchanged: number;
   /** 致命错误(不可恢复,如源目录不可读) */

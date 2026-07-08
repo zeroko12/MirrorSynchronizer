@@ -27,7 +27,7 @@ import { mainLog } from '../core/logger.js';
 import { SOURCE_TEST_SAMPLE_SIZE, SOURCE_TEST_TIMEOUT_MS } from '../core/constants.js';
 import { pickAdapter, type SourceAdapter } from '../core/adapter.js';
 import { classifyFetchError, classifyHttpStatus, type PathErrorKind } from '../core/errors.js';
-import type { AppConfig } from '../core/types.js';
+import type { AppConfig, SyncResult } from '../core/types.js';
 import { getConfigPath, getHistoryDbPath, getIndexCachePath, getStatePath } from './services/paths.js';
 import { createWindow, getMainWindow } from './services/window.js';
 import { createTray } from './services/tray.js';
@@ -56,6 +56,37 @@ async function saveConfig(): Promise<void> {
   if (!currentConfig) return;
   const mgr = new ConfigManager({ configPath: getConfigPath(), defaults: DEFAULT_CONFIG });
   await mgr.save(currentConfig);
+}
+
+/**
+ * 映射拷贝成功后,看是否要启动可执行文件
+ *
+ * 与 scheduler.runNow → force 路径下的 launch 守卫对齐:
+ *  - 同步/映射成功(result.ok=true) → 才考虑 launch
+ *  - 配置了 executablePath → 启动
+ *  - 启动失败或文件不存在 → 返 null + warning
+ *
+ * "保存映射后立即应用"开关触发时,用户期望:
+ *   配置映射 → 保存 → IPC applyMappingsOnly → 启动
+ * 启动必须在映射拷完之后,这样程序加载的是最新文件。
+ */
+async function maybeLaunchAfterMappings(
+  config: AppConfig | null,
+  result: SyncResult,
+): Promise<number | null> {
+  if (!config || !result.ok) return null;
+  if (!config.executablePath || !config.executablePath.trim()) return null;
+  // 即便 result.mappingCopied 为空(本次没拷贝),只要映射路径里 executablePath 没问题
+  // 也尝试启动 — 用户的"保存映射后立即应用"意图是"完成动作后让程序跑起来"
+  const lr = await tryLaunchExecutable(config.targetDir, config.executablePath);
+  if (lr.launched && lr.pid) {
+    log.info(`[mappings:applyAll] 同步/映射成功,已启动 ${config.executablePath} (PID=${lr.pid})`);
+    return lr.pid;
+  }
+  if (lr.reason) {
+    log.warn(`[mappings:applyAll] 启动失败: ${lr.reason} - ${config.executablePath}`);
+  }
+  return null;
 }
 
 async function ensureConfig(): Promise<AppConfig> {
@@ -491,8 +522,13 @@ function registerIpc(): void {
       mappingCopied: result.mappingCopied,
       mappingSkippedExisting: result.mappingSkippedExisting,
       mappingSkipped: result.mappingSkipped,
+      mappingFailed: result.mappingFailed,
       warnings: result.warnings,
       error: result.fatalError,
+      // ★ 关键:映射拷贝成功 + 配置了 executablePath → 启动可执行文件
+      // 与 scheduler.runNow → force 流程一致:同步/映射成功后才 launch
+      // "保存映射后立即应用"开关触发这个 IPC,用户期望:映射拷完 → 程序启动
+      launchedPid: await maybeLaunchAfterMappings(currentConfig, result),
     };
   });
 

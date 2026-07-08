@@ -88,7 +88,7 @@ describe('StateManager', () => {
     const r = {
       added: ['new.txt'], modified: [], deleted: [],
       ok: true, startedAt: 0, durationMs: 0,
-      mappingCopied: [], mappingSkippedExisting: [], mappingSkipped: [],
+      mappingCopied: [], mappingSkippedExisting: [], mappingSkipped: [], mappingFailed: [],
       unchanged: 0, warnings: [], backupCreated: false,
     } as const;
     const fp = computeFingerprint(r as any).hash;

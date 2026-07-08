@@ -354,6 +354,7 @@ export class Scheduler {
         mappingCopied: [],
         mappingSkippedExisting: [],
         mappingSkipped: [],
+        mappingFailed: [],
         unchanged: 0,
         warnings: [],
         backupCreated: false,

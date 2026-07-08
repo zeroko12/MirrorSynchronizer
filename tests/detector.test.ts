@@ -17,6 +17,7 @@ function makeResult(overrides: Partial<SyncResult> = {}): SyncResult {
     mappingCopied: [],
     mappingSkippedExisting: [],
     mappingSkipped: [],
+    mappingFailed: [],
     unchanged: 0,
     warnings: [],
     backupCreated: false,
