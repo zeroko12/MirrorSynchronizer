@@ -1196,6 +1196,88 @@ describe('Syncer - applyMode=immediate-with-precheck(锁住则拒绝)', () => {
   });
 });
 
+describe('Syncer - applyMappingsOnly 在 staging 模式下的写入位置', () => {
+  let sourceDir: string;
+  let targetDir: string;
+  let stagingDir: string;
+  let localDir: string;
+  let config: AppConfig;
+
+  beforeEach(async () => {
+    sourceDir = await makeTempDir('amp-src-');
+    targetDir = await makeTempDir('amp-tgt-');
+    stagingDir = await makeTempDir('amp-stg-');
+    localDir = await makeTempDir('amp-local-');
+    config = {
+      ...DEFAULT_CONFIG,
+      sourceDir,
+      targetDir,
+      stagingDir,
+      applyMode: 'staging',
+      fileMappings: [],
+      ignoreItems: [],
+    };
+  });
+  afterEach(async () => {
+    await rmTemp(sourceDir);
+    await rmTemp(targetDir);
+    await rmTemp(stagingDir);
+    await rmTemp(localDir);
+  });
+
+  // ★ 关键回归:测试 IPC handler mappings:testOne 行为
+  // 之前:测试时用 currentConfig(applyMode='staging'),文件写到 stagingDir
+  //  → 通知说"成功"但用户去 targetDir 找文件,找不到,以为是 bug
+  // 修法:测试时强制 applyMode='immediate',文件直接落 target
+  // 此测试验证这个语义在两个分支下都正确:
+  //   - applyMappingsOnly 走 staging 路径(staging 默认行为)
+  //   - 用 immediate override 走 immediate 路径(测试按钮)
+  it('★ staging 模式 + applyMappingsOnly:文件写到 stagingDir,不在 targetDir', async () => {
+    await writeFile(join(localDir, 'template.ini'), 'CONTENT');
+    config.fileMappings = [
+      {
+        id: '1', name: 't',
+        sourcePath: join(localDir, 'template.ini'),
+        targetRelpath: 'data/template.ini',
+        enabled: true, overwrite: true, ifSourceMissing: 'skip',
+      },
+    ];
+    const syncer = new Syncer(config);
+    const result = await syncer.applyMappingsOnly();
+    expect(result.ok).toBe(true);
+    expect(result.mappingCopied).toEqual(['t']);
+    // staging 模式:文件在 stagingDir
+    expect((await fs.readFile(join(stagingDir, 'data', 'template.ini'), 'utf-8'))).toBe('CONTENT');
+    // 但 targetDir 没动
+    const targetFile = await fs.readFile(join(targetDir, 'data', 'template.ini'), 'utf-8').catch(() => null);
+    expect(targetFile).toBeNull();
+  });
+
+  it('★ 测试按钮路径(immediate 模式 override):文件直接落 targetDir', async () => {
+    await writeFile(join(localDir, 'template.ini'), 'CONTENT');
+    config.fileMappings = [
+      {
+        id: '1', name: 't',
+        sourcePath: join(localDir, 'template.ini'),
+        targetRelpath: 'data/template.ini',
+        enabled: true, overwrite: true, ifSourceMissing: 'skip',
+      },
+    ];
+    // ★ 模拟 IPC handler 的 testConfig 覆盖:applyMode='immediate'
+    // 这就是 mappings:testOne 在 main/index.ts 里的行为
+    const testConfig = { ...config, applyMode: 'immediate' as const };
+    const syncer = new Syncer(testConfig);
+    const result = await syncer.applyMappingsOnly();
+    expect(result.ok).toBe(true);
+    expect(result.mappingCopied).toEqual(['t']);
+    // 文件直接落到 targetDir(用户期望的"测试=立即看效果"语义)
+    expect((await fs.readFile(join(targetDir, 'data', 'template.ini'), 'utf-8'))).toBe('CONTENT');
+    // stagingDir 不动
+    const stagingFile = await fs.readFile(join(stagingDir, 'data', 'template.ini'), 'utf-8').catch(() => null);
+    expect(stagingFile).toBeNull();
+  });
+});
+
 describe('Syncer - 映射拷贝失败 (mappingFailed + 详细错误)', () => {
   let sourceDir: string;
   let targetDir: string;

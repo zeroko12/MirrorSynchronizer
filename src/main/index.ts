@@ -537,8 +537,13 @@ function registerIpc(): void {
     const m = currentConfig.fileMappings.find((x) => x.id === mappingId);
     if (!m) return { ok: false, error: '规则不存在' };
     const testMapping = { ...m, enabled: true };
-    const testConfig = {
+    // ★ 关键:测试时强制 applyMode='immediate' — 文件直接落到 targetDir
+    // 之前用 ...currentConfig 继承 applyMode,staging 模式下文件写到 stagingDir,
+    // 通知说'拷贝成功'但用户去 target 找文件找不到。
+    // 测试按钮的语义是"立刻看效果",走 staging 路径反而不可观测。
+    const testConfig: AppConfig = {
       ...currentConfig,
+      applyMode: 'immediate',
       fileMappings: currentConfig.fileMappings.map((x) => (x.id === mappingId ? testMapping : x)),
     };
     const syncer = new Syncer(testConfig);
@@ -548,6 +553,7 @@ function registerIpc(): void {
       mappingCopied: result.mappingCopied,
       mappingSkippedExisting: result.mappingSkippedExisting,
       mappingSkipped: result.mappingSkipped,
+      mappingFailed: result.mappingFailed,
       warnings: result.warnings,
       error: result.fatalError,
     };
