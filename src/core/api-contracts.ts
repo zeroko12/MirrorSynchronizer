@@ -198,8 +198,15 @@ export interface MappingsApplyResult {
   mappingCopied?: string[];
   mappingSkippedExisting?: string[];
   mappingSkipped?: string[];
+  /** 拷贝失败的映射名(permission denied / disk full / 等) */
+  mappingFailed?: string[];
   warnings?: string[];
   error?: string;
+  /**
+   * 同步/映射成功后启动的可执行文件 PID(仅 mappingsApplyAll + executablePath 配了会填)
+   * renderer 端据此给用户反馈"已启动 MyGame.exe (PID 1234)"
+   */
+  launchedPid?: number | null;
 }
 
 /* ============================ 源测试(预览) ============================ */

@@ -234,10 +234,18 @@ async function onSaveMapping() {
           const copied = applyRes.mappingCopied?.length ?? 0;
           const skippedExist = applyRes.mappingSkippedExisting?.length ?? 0;
           const skippedMissing = applyRes.mappingSkipped?.length ?? 0;
+          const failed = applyRes.mappingFailed?.length ?? 0;
           const warnings = applyRes.warnings?.length ?? 0;
           // 全维度显示,任何异常都不会被吞
           const parts = [`拷贝 ${copied}`, `目标已存在跳过 ${skippedExist}`, `源缺失跳过 ${skippedMissing}`];
+          if (failed > 0) parts.push(`失败 ${failed}`);
           if (warnings > 0) parts.push(`警告 ${warnings}`);
+          // ★ 关键:用户配了 executablePath,自动启动后会回传 PID,通知里告诉用户
+          // 之前我加了 maybeLaunchAfterMappings 但 renderer 没读 launchedPid,
+          // 用户点完"添加映射"看不到程序是否真的启动了。
+          if (applyRes.launchedPid) {
+            parts.push(`已启动 PID=${applyRes.launchedPid}`);
+          }
           message.success(`${editing.value ? '已更新' : '已添加'} · ${parts.join(' · ')}`);
           if (applyRes.warnings && applyRes.warnings.length) {
             for (const w of applyRes.warnings) message.warning(w, { duration: 6000 });
