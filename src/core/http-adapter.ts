@@ -127,13 +127,24 @@ export class HttpAdapter implements SourceAdapter {
   private normalizeManifestEntry(raw: unknown, index: number): ResourceEntry | null {
     if (!raw || typeof raw !== 'object') return null;
     const o = raw as Record<string, unknown>;
-    const relPath = typeof o.relPath === 'string' ? o.relPath : null;
-    const size = typeof o.size === 'number' ? o.size : Number(o.size);
-    const mtimeMs = typeof o.mtimeMs === 'number' ? o.mtimeMs : Number(o.mtimeMs);
-    if (!relPath || !Number.isFinite(size) || !Number.isFinite(mtimeMs)) {
-      coreLog.warn(`[http-adapter] manifest entry #${index} invalid, skip`);
+    // Strict type check BEFORE Number() coercion. Number(null) === 0 is finite
+    // and would otherwise pass validation, silently producing mtime=0 entries.
+    // JSON null on the server side should be rejected, not coerced.
+    if (typeof o.relPath !== 'string' || !o.relPath) {
+      coreLog.warn(`[http-adapter] manifest entry #${index} invalid (relPath), skip`);
       return null;
     }
+    if (typeof o.size !== 'number' || !Number.isFinite(o.size)) {
+      coreLog.warn(`[http-adapter] manifest entry #${index} invalid (size), skip`);
+      return null;
+    }
+    if (typeof o.mtimeMs !== 'number' || !Number.isFinite(o.mtimeMs)) {
+      coreLog.warn(`[http-adapter] manifest entry #${index} invalid (mtimeMs), skip`);
+      return null;
+    }
+    const relPath = o.relPath;
+    const size = o.size;
+    const mtimeMs = o.mtimeMs;
     const entry: ResourceEntry = { relPath, size, mtimeMs };
     if (typeof o.etag === 'string') entry.etag = o.etag;
     if (typeof o.hash === 'string') entry.hash = o.hash;
