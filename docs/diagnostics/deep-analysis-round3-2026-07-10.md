@@ -1,5 +1,7 @@
 # Deep analysis round 3 — 2026-07-10 (HTTP / WebDAV / parsers)
 
+> **Pattern family:** [Silent type coercion](../architecture/SILENT-COERCION.md). Bug found here (HttpAdapter normalizeManifestEntry null→0) is one of 4 sibling bugs consolidated in the master pattern doc.
+
 **Trigger:** Round 2 found 0 bugs in state/launcher/scheduler. User asked to keep digging into HTTP / WebDAV adapters and the parser chain.
 
 **Method:** Round 3 reads [src/core/http-adapter.ts](../../src/core/http-adapter.ts), [src/core/webdav-adapter.ts](../../src/core/webdav-adapter.ts), and [src/core/adapters/parsers.ts](../../src/core/adapters/parsers.ts), then constructs property tests against pure-function boundaries + an HTTP-server-backed integration test for the manifest normalization path.

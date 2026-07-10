@@ -1,5 +1,7 @@
 # Architecture audit: silent type coercion — 2026-07-10
 
+> **Pattern catalog:** see [docs/architecture/SILENT-COERCION.md](../../architecture/SILENT-COERCION.md) for the master cross-reference. This file is the audit evidence trail.
+
 **Trigger:** Three rounds of diagnosing-bugs found two sibling bugs (412fa71 mapping mtime drift, 4032175 HttpAdapter null→0) — both same shape: silent type coercion in validation that bypassed the mtime comparator and caused perpetual re-copy. User asked for a repo-wide audit of the same anti-pattern.
 
 **Method:** Grep `src/core/` for `Number(x)`, `parseInt(x)`, `parseFloat(x)`, `String(x)`, `Boolean(x)`, `as <primitive>` double-asserts. For each match, decide: **safe** (coercion inside bounded input) / **footgun** (coercion on user-controlled value) / **defense-layered** (looks unsafe but upstream guards).

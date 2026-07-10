@@ -1,5 +1,7 @@
 # Systematic code survey — 2026-07-10
 
+> **Pattern family:** [Silent type coercion](../architecture/SILENT-COERCION.md). This round found 0 new bugs at the public surface; later rounds (deep analysis round 3, architecture audit) caught 3 sibling bugs from the same family. See master doc for the consolidated picture.
+
 **Trigger:** after fixing the sync-mtime drift bug ([commit 412fa71](./sync-mtime-drift.md)), user asked to keep digging — verify the rest of the codebase doesn't hide similar latent issues.
 
 **Method:** build a survey harness that constructs 17 candidate edge cases against the public `Syncer.sync` / `Syncer.applyMappingsOnly` / `ConfigManager.save` surfaces. Run, look for reds.

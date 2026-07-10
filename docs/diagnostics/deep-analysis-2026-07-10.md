@@ -1,5 +1,7 @@
 # Deep analysis — 2026-07-10 (round 2)
 
+> **Pattern family:** [Silent type coercion](../architecture/SILENT-COERCION.md). This round found 0 new bugs at internal invariants; rounds 3+ caught the 3 other sibling bugs from the same family. See master doc for the consolidated picture.
+
 **Trigger:** After systematic survey ([systematic-survey-2026-07-10.md](./systematic-survey-2026-07-10.md)) found 0 latent bugs at the public surface, user asked for deeper analysis on internal invariants.
 
 **Method:** Read 5 internal modules (`state.ts`, `detector.ts`, `scheduler.ts`, `launcher.ts`, `fs-utils.ts`) and construct property tests against internal contracts. 21 candidate invariants tested.

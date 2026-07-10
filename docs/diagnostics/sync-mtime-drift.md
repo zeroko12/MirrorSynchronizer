@@ -4,6 +4,8 @@
 **Investigator:** Claude (diagnosing-bugs)
 **Symptom (user report):** "上机测试发现有时候无法同步" (UI-driven, intermittent)
 
+> **Pattern family:** [Silent type coercion](../architecture/SILENT-COERCION.md). Specifically the "target mtime drift forward of source" instance. See also commits 4032175, c2bdf4a, d6dc4df for sibling bugs.
+
 ## TL;DR
 
 [`src/core/syncer.ts`](../../src/core/syncer.ts) 中映射规则的 `applyMapping()` 用 `fs.copyFile` + `fs.utimes(Date.now())` 强制 target mtime 为"现在",**从不保留源 mtime,也不做 mtime 短路**。每一次 sync 都把 `overwrite=true` 的映射规则重新写一遍。目标文件被防病毒扫描 / 用户编辑 / 沙盒占用时,这条 re-copy 触发 EBUSY,UI 弹 warning,看上去就是"这次同步失败"。
