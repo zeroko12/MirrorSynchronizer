@@ -78,7 +78,7 @@ export class HttpAdapter implements SourceAdapter {
     if (!res.ok) {
       throw new Error(`HTTP ${res.status} for ${relPath}`);
     }
-    const size = Number(res.headers.get('content-length') ?? 0);
+    const size = safeParseContentLength(res.headers.get('content-length'));
     const mtimeMs = parseHttpDate(res.headers.get('last-modified')) ?? Date.now();
     const etag = res.headers.get('etag') ?? undefined;
     const body = res.body
@@ -181,4 +181,21 @@ function parseHttpDate(s: string | null): number | null {
   if (!s) return null;
   const t = Date.parse(s);
   return Number.isFinite(t) ? t : null;
+}
+
+/**
+ * Parse Content-Length header safely.
+ * - Missing header → 0 (legal: chunked transfer encoding has no Content-Length)
+ * - Malformed header (NaN) → throw — server misbehavior should be loud, not silent
+ *   (a NaN size would propagate through FileEntry and corrupt needsCopy logic)
+ *
+ * Exported for WebDAVAdapter which has the same need.
+ */
+export function safeParseContentLength(raw: string | null): number {
+  if (raw === null || raw === '') return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(`malformed Content-Length header: ${JSON.stringify(raw)}`);
+  }
+  return n;
 }

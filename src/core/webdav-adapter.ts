@@ -19,6 +19,7 @@ import { Readable } from 'node:stream';
 import type { ResourceEntry, SourceAdapter, OpenConditionalResult } from './adapter.js';
 import { coreLog } from './logger.js';
 import { parseWebdavPropfind } from './adapters/parsers.js';
+import { safeParseContentLength } from './http-adapter.js';
 
 export class WebDAVAdapter implements SourceAdapter {
   readonly kind = 'webdav' as const;
@@ -95,7 +96,7 @@ export class WebDAVAdapter implements SourceAdapter {
     if (!res.ok) {
       throw new Error(`HTTP ${res.status} for ${relPath}`);
     }
-    const size = Number(res.headers.get('content-length') ?? 0);
+    const size = safeParseContentLength(res.headers.get('content-length'));
     const mtimeMs = parseHttpDate(res.headers.get('last-modified')) ?? Date.now();
     const etag = res.headers.get('etag') ?? undefined;
     const body = res.body
