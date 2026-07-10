@@ -33,6 +33,7 @@ import {
   type PathErrorKind,
 } from './errors.js';
 import { pickAdapter, streamToFile, isRemotePath, type SourceAdapter } from './adapter.js';
+import { safeParseContentLength } from './http-adapter.js';
 import { MTIME_JITTER_TOLERANCE_MS } from './constants.js';
 import { preflightTargetFilesWritable } from './preflight-locks.js';
 
@@ -713,7 +714,14 @@ export class Syncer {
         const head = await fetch(normalized, { method: 'HEAD' });
         if (head.ok) {
           sourceExists = true;
-          sourceSize = Number(head.headers.get('content-length') ?? 0);
+          try {
+            sourceSize = safeParseContentLength(head.headers.get('content-length'));
+          } catch (err) {
+            // Malformed Content-Length on HEAD shouldn't kill the apply path —
+            // fall back to size=0 (treated as "size unknown, mtime decides").
+            coreLog.warn(`[mapping] ${mapping.name}: HEAD Content-Length 不可用,fallback size=0: ${(err as Error).message}`);
+            sourceSize = 0;
+          }
         }
         await adapter.close().catch(() => undefined);
         coreLog.info(`[mapping] ${mapping.name}: HEAD sourcePath ok, size=${sourceSize}`);
