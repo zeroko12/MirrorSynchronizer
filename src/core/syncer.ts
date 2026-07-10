@@ -667,7 +667,34 @@ export class Syncer {
       `| overwrite=${mapping.overwrite} targetExists=${targetExists} dryRun=${dryRun}`,
     );
 
-    // 1. 目标已存在 + overwrite=false → 跳过(用户已有了,不动)
+    // 1. 目标已存在 + 内容跟源一致(mtime + size 在 tolerance 内)→ 跳过(没必要 re-copy)
+    //
+    // 修复:原代码用 fs.copyFile + fs.utimes(Date.now()) 强制 target mtime 为 "now",
+    // 导致 target mtime 永远比 source mtime 晚(且差距 > MTIME_JITTER_TOLERANCE_MS),
+    // 下一次 sync 必然把所有 overwrite=true 的映射标为 modified → 反复无意义 re-copy。
+    // 用户表现:"有时候同步无法完成" — 当目标被防病毒/编辑器占用时,这个 re-copy
+    // 会触发 EBUSY → 弹 warning → 看起来就是失败。
+    //
+    // 现在跟镜像同步走一样的契约:target mtime 保留自 source,大小一致就跳过。
+    const targetEntry = targetMap.get(relPath);
+    if (targetExists && mapping.overwrite && targetEntry && !isRemotePath(mapping.sourcePath)) {
+      try {
+        const st = await fs.stat(mapping.sourcePath);
+        if (
+          st.isFile() &&
+          st.size === targetEntry.size &&
+          Math.abs(targetEntry.mtimeMs - st.mtimeMs) <= MTIME_JITTER_TOLERANCE_MS
+        ) {
+          coreLog.info(`[mapping] ${mapping.name}: 目标与源一致 (size+mtime) → skip`);
+          result.mappingSkippedExisting.push(mapping.name);
+          return;
+        }
+      } catch {
+        // source stat 失败不要短路 — 让后面的 ifSourceMissing 路径去处理
+      }
+    }
+
+    // 2. 目标已存在 + overwrite=false → 跳过(用户已有了,不动)
     if (targetExists && !mapping.overwrite) {
       coreLog.info(`[mapping] ${mapping.name}: 目标已存在 + overwrite=false → skip`);
       result.mappingSkippedExisting.push(mapping.name);
@@ -758,8 +785,11 @@ export class Syncer {
             await adapter.close().catch(() => undefined);
           }
         } else {
-          await fs.copyFile(mapping.sourcePath, targetPath);
-          await fs.utimes(targetPath, new Date(), new Date());
+          // 用 COPYFILE_PRESERVE_TIMESTAMPS 让 target 的 mtime = source mtime,
+          // 这样下一次 sync 的 mtime+size 短路能正确触发。
+          // (原 utimes(Date.now()) 会让 target mtime 漂移到"现在",
+          //  导致下一轮必然误判 modified → 无意义 re-copy。)
+          await fs.copyFile(mapping.sourcePath, targetPath, fs.constants.COPYFILE_PRESERVE_TIMESTAMPS);
           coreLog.info(`[mapping] ${mapping.name}: 已拷贝到 ${targetPath}`);
         }
       } catch (err) {
