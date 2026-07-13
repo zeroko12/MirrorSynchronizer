@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, writeFile, rm, readdir, readFile } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Syncer } from '@core/syncer';
@@ -99,7 +99,6 @@ describe('H2: staging orphan — target 留文件直到 swap', () => {
         stagingDir,
         backupDir: '',
         backupCount: 1,
-        sourceDir,
       });
       console.error('[H2] swap.result:', swapResult);
 

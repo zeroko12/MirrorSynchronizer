@@ -793,11 +793,17 @@ export class Syncer {
             await adapter.close().catch(() => undefined);
           }
         } else {
-          // 用 COPYFILE_PRESERVE_TIMESTAMPS 让 target 的 mtime = source mtime,
+          // 显式保留源 mtime(target mtime = source mtime),
           // 这样下一次 sync 的 mtime+size 短路能正确触发。
           // (原 utimes(Date.now()) 会让 target mtime 漂移到"现在",
           //  导致下一轮必然误判 modified → 无意义 re-copy。)
-          await fs.copyFile(mapping.sourcePath, targetPath, fs.constants.COPYFILE_PRESERVE_TIMESTAMPS);
+          //
+          // 注意:不能用 fs.constants.COPYFILE_PRESERVE_TIMESTAMPS — 该 libuv
+          // 常量在 @types/node 里没导出(平台相关);改用 fs.utimes 显式设回源 mtime,
+          // 跨平台稳定。
+          const srcStat = await fs.stat(mapping.sourcePath);
+          await fs.copyFile(mapping.sourcePath, targetPath);
+          await fs.utimes(targetPath, new Date(srcStat.mtimeMs), new Date(srcStat.mtimeMs));
           coreLog.info(`[mapping] ${mapping.name}: 已拷贝到 ${targetPath}`);
         }
       } catch (err) {

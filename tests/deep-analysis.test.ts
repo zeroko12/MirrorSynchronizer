@@ -10,11 +10,10 @@ import { mkdtemp, writeFile, rm, readFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StateManager } from '@core/state';
-import { tryLaunchExecutable, isExecutableLocked } from '@core/launcher';
+import { tryLaunchExecutable } from '@core/launcher';
 import { computeBackoff } from '@core/scheduler';
 import { atomicWriteJson, readJsonSafe } from '@core/fs-utils';
 import { computeFingerprint, decide } from '@core/detector';
-import type { AppState } from '@core/state';
 import type { SyncResult } from '@core/types';
 
 async function tmpDir(prefix: string): Promise<string> {
@@ -181,7 +180,6 @@ describe('scheduler.ts computeBackoff: deterministic at the boundary', () => {
     // Math: random() ∈ [0, 1), so floor(random() * exp) ∈ [0, exp)
     // Verify monotonic max bound:
     const base = 60_000;
-    const lastMax = -1;
     for (let n = 1; n <= 10; n++) {
       let exp = Math.min(base * 2 ** (n - 1), 300_000);
       let observedMax = 0;

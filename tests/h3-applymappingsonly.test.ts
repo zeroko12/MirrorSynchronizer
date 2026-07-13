@@ -16,8 +16,8 @@
  * (b)(c) 可能是用户报告的"UI 上看没同步"的真正来源
  */
 
-import { describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, writeFile, rm, readdir, stat } from 'node:fs/promises';
+import { describe, it } from 'vitest';
+import { mkdtemp, writeFile, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Syncer } from '@core/syncer';
@@ -84,8 +84,8 @@ describe('H3: applyMappingsOnly 写入位置 vs 用户期望', () => {
       // If expected-by-user (target 应有 config/),this is a UX bug.
 
       // For now, simply log the behavior so we can discuss with the user.
-      const targetHasConfigBeforeSwap = targetHasConfig;
-      const stagingHasConfigBeforeSwap = stagingHasConfig;
+      void targetHasConfig;
+      void stagingHasConfig;
 
       // (d) Now run actual sync — should sync data.txt AND trigger swap due to pendingApplyCount > 0
       const syncResult = await syncer.sync(null, {});

@@ -23,7 +23,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { safeParseContentLength } from '@core/http-adapter';
 import { HttpAdapter } from '@core/http-adapter';
-import { WebDAVAdapter } from '@core/webdav-adapter';
 
 describe('safeParseContentLength: boundary cases', () => {
   it('null → 0 (chunked transfer)', () => {

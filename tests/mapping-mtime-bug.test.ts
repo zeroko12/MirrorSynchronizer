@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, writeFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Syncer } from '@core/syncer';

@@ -17,8 +17,8 @@
  *   镜像不写盘,但映射规则偷偷写了 — 行为不一致
  */
 
-import { describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, writeFile, rm, readdir, readFile } from 'node:fs/promises';
+import { describe, it } from 'vitest';
+import { mkdtemp, writeFile, rm, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Syncer } from '@core/syncer';

@@ -16,13 +16,13 @@
  * Tagged with [DEBUG-fuzzN] in repro output for grep-cleanup.
  */
 
-import { describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile, stat } from 'node:fs/promises';
+import { describe, it } from 'vitest';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Syncer } from '@core/syncer';
-import type { AppConfig, FileEntry, FileMapping } from '@core/types';
-import { classifyErrno } from '@core/errors';
+import type { AppConfig, FileMapping } from '@core/types';
 
 const ROOT = tmpdir();
 
@@ -167,7 +167,7 @@ function buildConfig(state: FsState, seed: Seed, applyMode: 'immediate' | 'stagi
 async function readTree(root: string): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   async function walk(abs: string, relBase: string): Promise<void> {
-    let entries: Awaited<ReturnType<typeof readdir>>;
+    let entries: Dirent[];
     try {
       entries = await readdir(abs, { withFileTypes: true });
     } catch (err) {
