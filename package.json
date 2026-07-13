@@ -1,6 +1,6 @@
 {
   "name": "auto-updater",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "自动更新检测程序 - 监控源目录(SMB 挂载)变更,镜像同步到目标目录,带 N 版备份",
   "main": "out/main/index.cjs",
   "type": "module",
