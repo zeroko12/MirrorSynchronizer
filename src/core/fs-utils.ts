@@ -8,7 +8,7 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 
 /**
  * 原子写 JSON:写 .tmp + rename
@@ -44,9 +44,4 @@ export async function readJsonSafe<T>(path: string, fallback: T): Promise<T> {
     // 文件存在但损坏 → log + fallback(与 state.ts 历史行为一致)
     return fallback;
   }
-}
-
-/** 衍生 .tmp 路径(给那些需要分两步写的场景,如 scheduler.saveIndex) */
-export function tmpPathFor(target: string): string {
-  return join(dirname(target), `.${target.split(/[\\/]/).pop() ?? 'file'}.tmp`);
 }

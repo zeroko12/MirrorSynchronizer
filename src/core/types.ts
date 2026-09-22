@@ -19,13 +19,6 @@ export interface FileEntry {
   etag?: string;
 }
 
-/** 索引缓存,持久化到磁盘,用于检测新增/修改/删除 */
-export interface IndexCache {
-  /** 索引对应的时间戳 */
-  indexedAt: number;
-  files: FileEntry[];
-}
-
 /** 同步一次的结果 */
 export interface SyncResult {
   /** 同步开始时间(毫秒) */

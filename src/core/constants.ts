@@ -17,9 +17,6 @@
 /** 应用显示名(中文)— tray / 主窗口 / toast 共用 */
 export const APP_DISPLAY_NAME = '自动更新检测';
 
-/** Electron appId — 来自 package.json,但 CLI 模式读不到,这里兜底 */
-export const APP_ID = 'com.local.auto-updater';
-
 /** userData 子目录名(CLI / 主进程共用) */
 export const APP_DATA_SUBDIR = 'auto-updater';
 

@@ -16,10 +16,6 @@ import electronLog from 'electron-log/main';
 
 type LogFn = (msg: string, ...args: unknown[]) => void;
 
-function noop(): void {
-  /* render stub */
-}
-
 function makeLoggers(enabled: boolean): {
   info: LogFn;
   warn: LogFn;
@@ -54,9 +50,3 @@ export const cliLog = makeLoggers(
  * 写到 stderr,不走文件 —— 写文件是主进程独有的事。
  */
 export const coreLog = makeLoggers(typeof process !== 'undefined');
-
-/** 渲染进程 logger —— 故意是 noop,渲染层用 console.* 即可。 */
-export const renderLog = { info: noop, warn: noop, error: noop, debug: noop };
-
-/** 暴露底层 electron-log,用于主进程初始化阶段设置日志路径等。 */
-export const _electronLog = electronLog;
