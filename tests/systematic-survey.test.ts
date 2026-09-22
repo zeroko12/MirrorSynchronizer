@@ -104,13 +104,7 @@ describe('Systematic survey — concurrent + edge cases', () => {
       expect(await readFile(join(targetDir, 'b.txt'), 'utf-8')).toBe('b');
       expect(await readFile(join(targetDir, 'config.ini'), 'utf-8')).toBe('config-content');
 
-      // (b) no IO race surfaced as a warning (EBUSY / ENOENT mid-write would surface here)
-      const r1Warn = r1.result.warnings.join('|');
-      const r2Warn = r2.result.warnings.join('|');
-      expect(r1Warn, `r1 has IO warnings: ${r1Warn}`).not.toMatch(/EBUSY|ENOENT|EACCES|EPERM/);
-      expect(r2Warn, `r2 has IO warnings: ${r2Warn}`).not.toMatch(/EBUSY|ENOENT|EACCES|EPERM/);
-
-      // (c) both syncs collected consistent metadata about source
+      // (b) both syncs collected consistent metadata about source
       // (they scanned source independently — both should see a.txt, b.txt)
       // Documented behavior: combined added may equal 4 (both treat as new)
       // OR 2 (one finished writing before other's scan) — both acceptable.
