@@ -17,14 +17,12 @@ import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { Indexer } from './indexer.js';
 import type { FileEntry } from './types.js';
+import type { SourceAdapterKind } from './api-contracts.js';
 import { HttpAdapter } from './http-adapter.js';
 import { WebDAVAdapter } from './webdav-adapter.js';
 
 /** 适配器产出的单文件元数据(与 FileEntry 同义,语义独立) */
 export type ResourceEntry = FileEntry;
-
-/** source 适配器类型 — 扩展位(预留给 WebDAV) */
-export type SourceAdapterKind = 'fs' | 'http' | 'webdav';
 
 /** source 适配器接口 */
 export interface SourceAdapter {
