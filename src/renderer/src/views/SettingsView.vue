@@ -97,6 +97,15 @@ const effectiveStagingDir = computed(() => {
 });
 
 /** 模板里调用的 handlers(模板不能直接赋值 ref.value,需要走方法) */
+
+function onSyncModeChange(v: 'mirror' | 'bidirectional') {
+  config.value = { ...config.value, syncMode: v };
+}
+
+function onConflictPolicyChange(v: 'rename-target' | 'source-wins' | 'target-wins' | 'manual') {
+  config.value = { ...config.value, conflictPolicy: v };
+}
+
 function onApplyModeChange(v: 'immediate' | 'staging' | 'immediate-with-precheck') {
   config.value = { ...config.value, applyMode: v };
 }
@@ -1034,6 +1043,37 @@ function formatTime(ts: number | null): string {
           </template>
         </n-form-item>
 
+        
+        <n-form-item label="同步模式">
+          <n-radio-group
+            :value="config.syncMode || 'mirror'"
+            @update:value="onSyncModeChange"
+          >
+            <n-radio value="mirror">
+              <b>单向镜像更新 (默认推荐)</b>
+            </n-radio>
+            <n-radio value="bidirectional">
+              <b>双向同步 (实验性)</b>
+            </n-radio>
+          </n-radio-group>
+          <n-text depth="3" style="display: block; margin-top: 6px; font-size: 12px; line-height: 1.6">
+            <div><b>单向镜像更新</b>: 源端为唯一事实标准，适合客户端更新、游戏分发、补丁分发。</div>
+            <div><b>双向同步</b>: 目标端改动会自动写回源端(源端支持写入时)，支持冲突安全重命名保护。</div>
+          </n-text>
+        </n-form-item>
+
+        <n-form-item v-if="config.syncMode === 'bidirectional'" label="双向同步冲突策略">
+          <n-radio-group
+            :value="config.conflictPolicy || 'rename-target'"
+            @update:value="onConflictPolicyChange"
+          >
+            <n-radio value="rename-target">重命名目标文件保留副本 (推荐，零丢失)</n-radio>
+            <n-radio value="source-wins">源端优先覆盖</n-radio>
+            <n-radio value="target-wins">目标端反写覆盖</n-radio>
+            <n-radio value="manual">跳过冲突等待手动解决</n-radio>
+          </n-radio-group>
+        </n-form-item>
+
         <n-form-item label="应用模式(应对目标程序运行时文件被锁)">
           <n-radio-group
             :value="config.applyMode"
@@ -1291,7 +1331,7 @@ function formatTime(ts: number | null): string {
         style="font-size: 12px; cursor: pointer; user-select: none;"
         @click="onVersionClick"
       >
-        v0.2.0
+        v0.3.4
         <span v-if="advancedMode" style="color: var(--primary); margin-left: 6px">⚙</span>
       </n-text>
     </footer>

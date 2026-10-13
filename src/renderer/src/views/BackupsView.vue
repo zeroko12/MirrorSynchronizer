@@ -206,9 +206,9 @@ async function load() {
 <template>
   <div class="page">
     <header class="hero">
-      <h1>备份管理</h1>
+      <h1>版本快照与还原</h1>
       <p class="subtitle">
-        共 {{ items.length }} 个备份 · 每次同步前(若有变更)自动创建 · {{ lastLoadLog || '加载中...' }}
+        共 {{ items.length }} 个备份 · 每次更新前自动创建还原点 · 支持一键秒级回退 · {{ lastLoadLog || '加载中...' }}
       </p>
     </header>
 

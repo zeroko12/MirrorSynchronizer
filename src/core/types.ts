@@ -41,6 +41,10 @@ export interface SyncResult {
   mappingSkipped: string[];
   /** 文件映射规则:拷贝失败的(permission denied / disk full 等) */
   mappingFailed: string[];
+  /** 双向同步反向写回源的文件列表 */
+  pushedToSource?: string[];
+  /** 双向同步冲突文件列表 */
+  conflicts?: string[];
   /** 跳过的(无变化) */
   unchanged: number;
   /** 致命错误(不可恢复,如源目录不可读) */
@@ -112,6 +116,13 @@ export interface FileMapping {
 }
 
 /** 应用配置 */
+
+/** 同步模式: 'mirror'(默认单向镜像) | 'bidirectional'(双向同步) */
+export type SyncMode = 'mirror' | 'bidirectional';
+
+/** 双向同步冲突解决策略 */
+export type ConflictPolicy = 'rename-target' | 'source-wins' | 'target-wins' | 'manual';
+
 export interface AppConfig {
   sourceDir: string;
   targetDir: string;
@@ -174,6 +185,10 @@ export interface AppConfig {
    * 远程 trigger (onRemoteRunNow) 不会启动(传 skipLaunch)。
    */
   executablePath: string;
+  /** 同步模式: mirror(默认) | bidirectional(双向) */
+  syncMode?: SyncMode;
+  /** 双向同步冲突策略 */
+  conflictPolicy?: ConflictPolicy;
   /**
    * 远程服务器(同 LAN 浏览器访问,只读 + 弹窗决策)
    * v0.1:仅暴露状态/历史/备份,允许远程确认弹窗;远程编辑 config 在 v0.2

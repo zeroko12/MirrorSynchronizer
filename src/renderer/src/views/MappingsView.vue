@@ -378,9 +378,9 @@ const columns: DataTableColumns<FileMapping> = [
 <template>
   <div class="page">
     <header class="hero">
-      <h1>文件映射规则</h1>
+      <h1>本地文件保护与映射</h1>
       <p class="subtitle">
-        每次同步完成后追加执行:把本地指定文件拷到目标目录固定位置
+        保护用户专属配置或独立存档: 更新时自动豁免删除, 目标缺失时自动补回
       </p>
     </header>
 

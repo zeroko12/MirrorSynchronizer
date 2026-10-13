@@ -27,6 +27,8 @@ const DEFAULT_CONFIG: AppConfig = {
   applyMode: 'staging',
   stagingDir: '',
   executablePath: '',
+  syncMode: 'mirror',
+  conflictPolicy: 'rename-target',
   remote: {
     enabled: true,           // 默认开启
     port: 9527,              // 默认端口
@@ -125,6 +127,15 @@ export class ConfigManager {
       if (config.stagingDir === config.sourceDir) {
         errors.push('stagingDir 不能等于 sourceDir');
       }
+    }
+
+    // syncMode 校验
+    if (config.syncMode && config.syncMode !== 'mirror' && config.syncMode !== 'bidirectional') {
+      errors.push(`syncMode 必须是 'mirror' 或 'bidirectional', 当前: ${String(config.syncMode)}`);
+    }
+    // conflictPolicy 校验
+    if (config.conflictPolicy && !['rename-target', 'source-wins', 'target-wins', 'manual'].includes(config.conflictPolicy)) {
+      errors.push(`conflictPolicy 非法: ${String(config.conflictPolicy)}`);
     }
     // applyMode 校验
     if (

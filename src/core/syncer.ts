@@ -19,7 +19,7 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { dirname, join, sep } from 'node:path';
+import { dirname, extname, join, sep } from 'node:path';
 import { Indexer, type ScanResult } from './indexer.js';
 import { Backupper } from './backupper.js';
 import { coreLog } from './logger.js';
@@ -148,6 +148,8 @@ export class Syncer {
       mappingSkippedExisting: [],
       mappingSkipped: [],
       mappingFailed: [],
+      pushedToSource: [],
+      conflicts: [],
       unchanged: 0,
       warnings: [],
       backupCreated: false,
@@ -236,6 +238,8 @@ export class Syncer {
       unchanged: 0,
       warnings: [],
       backupCreated: false,
+      pushedToSource: [],
+      conflicts: [],
     };
 
     const { sourceDir, targetDir, fileMappings } = this.config;
@@ -448,7 +452,39 @@ export class Syncer {
       }
     }
 
-    // 4. ADD / MODIFY / UNCHANGED
+    
+    // ★ 4. 若为双向同步模式 (bidirectional)
+    if (this.config.syncMode === 'bidirectional') {
+      await this.syncBidirectional({
+        sourceMap,
+        targetMap,
+        lastIndexMap,
+        adapter,
+        writeDir,
+        targetDir,
+        dryRun,
+        result,
+        exemptFromMirrorDelete,
+        isUnderMappingTarget,
+      });
+
+      // 应用文件映射规则
+      for (const mapping of fileMappings) {
+        if (!mapping.enabled) continue;
+        await this.applyMapping(mapping, targetMap, result, false, writeDir);
+      }
+
+      result.ok = !result.fatalError;
+      result.durationMs = Date.now() - startedAt;
+      await adapter.close().catch(() => undefined);
+
+      // 双向同步后以当前最新扫描为准生成索引
+      const finalScan = await this.indexer.scan(targetDir);
+      return { result, newSourceIndex: finalScan.files };
+    }
+
+    // 4. ADD / MODIFY / UNCHANGED (单向镜像模式 - 默认)
+
     let pendingWrittenCount = 0; // staging 模式下写入 staging 的文件数
     for (const [rel, sFile] of sourceMap) {
       const tFile = targetMap.get(rel);
@@ -610,6 +646,173 @@ export class Syncer {
    * - FsAdapter fatal:err.scanResult.fatalReason
    * - HttpAdapter:从 "HTTP NNN" 消息提取状态码,或从 errno 分类
    */
+
+  /**
+   * 双向同步实现:比较 Base(lastIndex) vs Source vs Target
+   */
+  private async syncBidirectional(ctx: {
+    sourceMap: Map<string, FileEntry>;
+    targetMap: Map<string, FileEntry>;
+    lastIndexMap: Map<string, FileEntry>;
+    adapter: SourceAdapter;
+    writeDir: string;
+    targetDir: string;
+    dryRun: boolean;
+    result: SyncResult;
+    exemptFromMirrorDelete: Set<string>;
+    isUnderMappingTarget: (rel: string) => boolean;
+  }): Promise<void> {
+    const {
+      sourceMap,
+      targetMap,
+      lastIndexMap,
+      adapter,
+      writeDir,
+      targetDir,
+      dryRun,
+      result,
+      exemptFromMirrorDelete,
+      isUnderMappingTarget,
+    } = ctx;
+
+    const allRels = new Set<string>([
+      ...sourceMap.keys(),
+      ...targetMap.keys(),
+      ...lastIndexMap.keys(),
+    ]);
+
+    for (const rel of allRels) {
+      const sFile = sourceMap.get(rel);
+      const tFile = targetMap.get(rel);
+      const bFile = lastIndexMap.get(rel);
+
+      const sChanged = !sFile
+        ? !!bFile
+        : !bFile ||
+          sFile.size !== bFile.size ||
+          Math.abs(sFile.mtimeMs - bFile.mtimeMs) > MTIME_JITTER_TOLERANCE_MS;
+
+      const tChanged = !tFile
+        ? !!bFile
+        : !bFile ||
+          tFile.size !== bFile.size ||
+          Math.abs(tFile.mtimeMs - bFile.mtimeMs) > MTIME_JITTER_TOLERANCE_MS;
+
+      // 1. 两端均未变
+      if (!sChanged && !tChanged) {
+        if (sFile && tFile) result.unchanged++;
+        continue;
+      }
+
+      // 2. 仅源端变动 -> 传播至目标端 (Source -> Target)
+      if (sChanged && !tChanged) {
+        if (sFile) {
+          if (!tFile) result.added.push(rel);
+          else result.modified.push(rel);
+          if (!dryRun) {
+            try {
+              await this.copyFromAdapter(adapter, writeDir, sFile);
+            } catch (err) {
+              result.warnings.push(`拷贝到目标失败: ${rel} (${(err as Error).message})`);
+            }
+          }
+        } else {
+          // 源端删除了
+          if (!exemptFromMirrorDelete.has(normalize(rel)) && !isUnderMappingTarget(rel)) {
+            result.deleted.push(rel);
+            if (!dryRun) {
+              await fs.unlink(join(targetDir, rel)).catch(() => undefined);
+            }
+          }
+        }
+        continue;
+      }
+
+      // 3. 仅目标端变动 -> 传播至源端 (Target -> Source)
+      if (!sChanged && tChanged) {
+        if (!adapter.canWrite || !adapter.writeFromPath) {
+          result.warnings.push(`源适配器(${adapter.kind})不支持写入,无法反向同步: ${rel}`);
+          continue;
+        }
+
+        if (tFile) {
+          result.pushedToSource?.push(rel);
+          if (!dryRun) {
+            try {
+              await adapter.writeFromPath(rel, join(targetDir, rel), tFile.mtimeMs);
+            } catch (err) {
+              result.warnings.push(`反向写回源失败: ${rel} (${(err as Error).message})`);
+            }
+          }
+        } else {
+          // 目标端删除了
+          result.pushedToSource?.push(`(del) ${rel}`);
+          if (!dryRun && adapter.deleteFile) {
+            try {
+              await adapter.deleteFile(rel);
+            } catch (err) {
+              result.warnings.push(`从源端删除失败: ${rel} (${(err as Error).message})`);
+            }
+          }
+        }
+        continue;
+      }
+
+      // 4. 双端同时变动 -> 冲突判定
+      if (sChanged && tChanged) {
+        // 如果两端内容碰巧一致
+        if (
+          sFile &&
+          tFile &&
+          sFile.size === tFile.size &&
+          Math.abs(sFile.mtimeMs - tFile.mtimeMs) <= MTIME_JITTER_TOLERANCE_MS
+        ) {
+          result.unchanged++;
+          continue;
+        }
+
+        result.conflicts?.push(rel);
+        const policy = this.config.conflictPolicy || 'rename-target';
+
+        if (policy === 'rename-target' && tFile) {
+          const ext = extname(rel);
+          const baseName = rel.slice(0, rel.length - ext.length);
+          const conflictRel = `${baseName}.conflict-tgt-${Date.now()}${ext}`;
+          result.warnings.push(`检测到冲突, 目标文件重命名保留副本: ${conflictRel}`);
+          if (!dryRun) {
+            try {
+              await fs.rename(join(targetDir, rel), join(targetDir, conflictRel));
+              if (sFile) {
+                await this.copyFromAdapter(adapter, writeDir, sFile);
+              }
+            } catch (err) {
+              result.warnings.push(`冲突处理失败: ${rel} (${(err as Error).message})`);
+            }
+          }
+          if (sFile) result.modified.push(rel);
+        } else if (policy === 'source-wins') {
+          if (sFile) {
+            result.modified.push(rel);
+            if (!dryRun) await this.copyFromAdapter(adapter, writeDir, sFile);
+          } else {
+            result.deleted.push(rel);
+            if (!dryRun) await fs.unlink(join(targetDir, rel)).catch(() => undefined);
+          }
+        } else if (policy === 'target-wins') {
+          if (tFile && adapter.canWrite && adapter.writeFromPath) {
+            result.pushedToSource?.push(rel);
+            if (!dryRun) await adapter.writeFromPath(rel, join(targetDir, rel), tFile.mtimeMs);
+          } else if (!tFile && adapter.canWrite && adapter.deleteFile) {
+            result.pushedToSource?.push(`(del) ${rel}`);
+            if (!dryRun) await adapter.deleteFile(rel);
+          }
+        } else {
+          result.warnings.push(`冲突 (${rel}) 需手动解决,已跳过`);
+        }
+      }
+    }
+  }
+
   private classifyAdapterError(
     err: unknown,
     sourceDir: string,

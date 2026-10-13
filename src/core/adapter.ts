@@ -13,7 +13,7 @@
  */
 
 import { createReadStream, promises as fs } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { Indexer } from './indexer.js';
 import type { FileEntry } from './types.js';
@@ -28,6 +28,12 @@ export type ResourceEntry = FileEntry;
 export interface SourceAdapter {
   /** 适配器标识(用于日志和 UI 展示) */
   readonly kind: SourceAdapterKind;
+  /** 是否支持反向写入(双向同步模式使用) */
+  readonly canWrite?: boolean;
+  /** 写入本地文件至源端 */
+  writeFromPath?(relPath: string, localFilePath: string, mtimeMs?: number): Promise<void>;
+  /** 从源端删除文件 */
+  deleteFile?(relPath: string): Promise<void>;
 
   /** 扫描整个 source 树,返回所有文件条目 */
   scan(): Promise<ResourceEntry[]>;
@@ -116,6 +122,28 @@ export class FsAdapter implements SourceAdapter {
   async close(): Promise<void> {
     // no-op
   }
+
+  readonly canWrite = true;
+
+  async writeFromPath(relPath: string, localFilePath: string, mtimeMs?: number): Promise<void> {
+    const abs = join(this.root, relPath);
+    await fs.mkdir(dirname(abs), { recursive: true });
+    await fs.copyFile(localFilePath, abs);
+    if (mtimeMs != null) {
+      const dt = new Date(mtimeMs);
+      await fs.utimes(abs, dt, dt).catch(() => undefined);
+    }
+  }
+
+  async deleteFile(relPath: string): Promise<void> {
+    const abs = join(this.root, relPath);
+    try {
+      await fs.unlink(abs);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+  }
+
 }
 
 /* ============================ Utility ============================ */

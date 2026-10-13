@@ -1,9 +1,11 @@
 <script setup lang="ts">
 /**
- * App.vue - 应用根
+ * App.vue - 软件更新中心应用外壳
  *
- * P3 引入 tab 切换:设置 / 备份 / 历史
- * P4 接 update:prompt 事件 → 触发 UpdateDialog
+ * 现代化布局:
+ * - 默认概览页 (DashboardView)
+ * - 顶部品牌区与精致 Tab 导航
+ * - 响应式微交互
  */
 
 import { ref, onErrorCaptured, onMounted } from 'vue';
@@ -15,13 +17,14 @@ import {
   zhCN,
   dateZhCN,
 } from 'naive-ui';
+import DashboardView from './views/DashboardView.vue';
 import SettingsView from './views/SettingsView.vue';
 import BackupsView from './views/BackupsView.vue';
 import HistoryView from './views/HistoryView.vue';
 import MappingsView from './views/MappingsView.vue';
 import UpdateDialog from './views/UpdateDialog.vue';
 
-const tab = ref<'settings' | 'backups' | 'history' | 'mappings'>('settings');
+const tab = ref<'dashboard' | 'settings' | 'backups' | 'history' | 'mappings'>('dashboard');
 const errors = ref<Array<{ message: string; stack?: string }>>([]);
 const updateDialogRef = ref<InstanceType<typeof UpdateDialog> | null>(null);
 
@@ -32,11 +35,15 @@ onErrorCaptured((err) => {
 });
 
 onMounted(() => {
-  // P4: 监听主进程推送的"需要弹窗确认"事件
+  // 监听主进程推送的"需要弹窗确认"事件
   window.api.onUpdatePrompt?.((payload) => {
     updateDialogRef.value?.showPrompt(payload);
   });
 });
+
+function handleNavigate(targetTab: 'dashboard' | 'settings' | 'backups' | 'history' | 'mappings') {
+  tab.value = targetTab;
+}
 </script>
 
 <template>
@@ -44,7 +51,14 @@ onMounted(() => {
     <n-message-provider>
       <div class="app-shell">
         <header class="app-header">
-          <div class="app-title">自动更新检测</div>
+          <div class="brand-area" @click="tab = 'dashboard'">
+            <span class="brand-icon">🚀</span>
+            <div class="brand-text">
+              <span class="app-title">软件更新与同步中心</span>
+              <span class="app-subtitle">MirrorSynchronizer v0.3.4</span>
+            </div>
+          </div>
+
           <n-tabs
             v-model:value="tab"
             type="line"
@@ -52,14 +66,16 @@ onMounted(() => {
             class="app-tabs"
             animated
           >
-            <n-tab-pane name="settings" tab="设置" />
-            <n-tab-pane name="mappings" tab="映射" />
-            <n-tab-pane name="backups" tab="备份" />
-            <n-tab-pane name="history" tab="历史" />
+            <n-tab-pane name="dashboard" tab="🏠 概览" />
+            <n-tab-pane name="settings" tab="⚙️ 设置" />
+            <n-tab-pane name="mappings" tab="🛡️ 保护规则" />
+            <n-tab-pane name="backups" tab="📦 备份快照" />
+            <n-tab-pane name="history" tab="📜 日志" />
           </n-tabs>
         </header>
 
         <main class="app-main">
+          <DashboardView v-show="tab === 'dashboard'" @navigate="handleNavigate" />
           <SettingsView v-show="tab === 'settings'" />
           <MappingsView v-show="tab === 'mappings'" />
           <BackupsView v-show="tab === 'backups'" />
@@ -91,6 +107,8 @@ body {
   margin: 0;
   padding: 0;
   height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 #app {
@@ -109,27 +127,52 @@ body {
 .app-header {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 0 16px;
-  border-bottom: 1px solid #e4e7eb;
-  background: #fff;
+  gap: 20px;
+  padding: 0 20px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
   flex-shrink: 0;
   flex-wrap: nowrap;
-  min-width: 0; /* 让内部 n-tabs 可以收缩 */
+  min-width: 0;
+  height: 58px;
+}
+
+.brand-area {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.brand-icon {
+  font-size: 22px;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
 }
 
 .app-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1f2933;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
   white-space: nowrap;
-  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.app-subtitle {
+  font-size: 11px;
+  color: #64748b;
+  font-family: monospace;
 }
 
 .app-tabs {
   flex: 1;
-  min-width: 0; /* 关键:允许 flex 子项收缩到内容以下 */
-  overflow-x: auto; /* tab 太多时横向滚 */
+  min-width: 0;
+  overflow-x: auto;
   overflow-y: hidden;
 }
 
@@ -138,25 +181,33 @@ body {
 }
 
 .app-tabs :deep(.n-tabs-nav-scroll-content) {
-  /* 让 tab 列表能横向滚 */
   white-space: nowrap;
 }
 
-/* 大屏(>= 900px)给点呼吸空间 */
+.app-tabs :deep(.n-tabs-tab) {
+  font-size: 14px;
+  font-weight: 500;
+  padding: 18px 14px !important;
+}
+
+.app-tabs :deep(.n-tabs-tab--active) {
+  font-weight: 600;
+}
+
 @media (min-width: 900px) {
   .app-header {
     padding: 0 32px;
-    gap: 32px;
+    gap: 36px;
   }
 }
 
 .app-main {
   flex: 1;
-  min-height: 0; /* 关键:让 flex 子项能收缩 */
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden; /* 不在这里滚,让各 view 的 .page 自己决定 */
-  background: #f5f7fa;
+  overflow: hidden;
+  background: #f8fafc;
 }
 
 .error-bar {
