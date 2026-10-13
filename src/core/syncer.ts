@@ -380,6 +380,8 @@ export class Syncer {
       if (sourceMap.has(rel)) continue;
       if (exemptFromMirrorDelete.has(normalize(rel))) continue;
       if (isUnderMappingTarget(rel)) continue; // 映射目标目录下的文件不参与同步删除判断
+      // 双向同步模式下: 目标新增文件不参与删除计划(会反向推送到源)
+      if (this.config.syncMode === 'bidirectional' && !lastIndexMap.has(rel)) continue;
       plannedDeleted.push(rel);
     }
 
@@ -466,6 +468,7 @@ export class Syncer {
         result,
         exemptFromMirrorDelete,
         isUnderMappingTarget,
+        ignoreItems,
       });
 
       // 应用文件映射规则
@@ -661,6 +664,7 @@ export class Syncer {
     result: SyncResult;
     exemptFromMirrorDelete: Set<string>;
     isUnderMappingTarget: (rel: string) => boolean;
+    ignoreItems: string[];
   }): Promise<void> {
     const {
       sourceMap,
@@ -673,7 +677,10 @@ export class Syncer {
       result,
       exemptFromMirrorDelete,
       isUnderMappingTarget,
+      ignoreItems,
     } = ctx;
+
+    let pendingWrittenCount = 0;
 
     const allRels = new Set<string>([
       ...sourceMap.keys(),
@@ -682,9 +689,23 @@ export class Syncer {
     ]);
 
     for (const rel of allRels) {
+      // 0. 排除项检查: 无论是源还是目标, 命中 ignoreItems 的文件完全不参与比对/拷贝/删除/反推
+      if (isInIgnoredItem(rel, ignoreItems)) {
+        continue;
+      }
+
       const sFile = sourceMap.get(rel);
       const tFile = targetMap.get(rel);
       const bFile = lastIndexMap.get(rel);
+
+      // 0.5 文件映射保护检查:
+      // 如果文件属于映射目标路径(或其子树), 它由 applyMappings 专门管理,
+      // 绝不应反向推送到源端 (pushedToSource), 也不应被当作孤儿删除
+      if (exemptFromMirrorDelete.has(normalize(rel)) || isUnderMappingTarget(rel)) {
+        if (!sFile) {
+          continue;
+        }
+      }
 
       const sChanged = !sFile
         ? !!bFile
@@ -712,8 +733,15 @@ export class Syncer {
           if (!dryRun) {
             try {
               await this.copyFromAdapter(adapter, writeDir, sFile);
+              if (writeDir !== targetDir) pendingWrittenCount++;
+              if (rel === this.config.executablePath) {
+                result.executableUpdate = 'success';
+              }
             } catch (err) {
               result.warnings.push(`拷贝到目标失败: ${rel} (${(err as Error).message})`);
+              if (rel === this.config.executablePath) {
+                result.executableUpdate = 'blocked';
+              }
             }
           }
         } else {
@@ -784,6 +812,7 @@ export class Syncer {
               await fs.rename(join(targetDir, rel), join(targetDir, conflictRel));
               if (sFile) {
                 await this.copyFromAdapter(adapter, writeDir, sFile);
+                if (writeDir !== targetDir) pendingWrittenCount++;
               }
             } catch (err) {
               result.warnings.push(`冲突处理失败: ${rel} (${(err as Error).message})`);
@@ -793,7 +822,10 @@ export class Syncer {
         } else if (policy === 'source-wins') {
           if (sFile) {
             result.modified.push(rel);
-            if (!dryRun) await this.copyFromAdapter(adapter, writeDir, sFile);
+            if (!dryRun) {
+              await this.copyFromAdapter(adapter, writeDir, sFile);
+              if (writeDir !== targetDir) pendingWrittenCount++;
+            }
           } else {
             result.deleted.push(rel);
             if (!dryRun) await fs.unlink(join(targetDir, rel)).catch(() => undefined);
@@ -810,6 +842,16 @@ export class Syncer {
           result.warnings.push(`冲突 (${rel}) 需手动解决,已跳过`);
         }
       }
+    }
+
+    // staging 模式下写完标记 .pending-apply
+    if (!dryRun && writeDir !== targetDir && pendingWrittenCount > 0) {
+      try {
+        await fs.writeFile(join(writeDir, '.pending-apply'), '');
+      } catch (err) {
+        result.warnings.push(`写 .pending-apply 标记失败: ${(err as Error).message}`);
+      }
+      result.pendingApplyCount = pendingWrittenCount;
     }
   }
 
