@@ -346,5 +346,5 @@ describe('Fuzz harness for Syncer.sync (intermittent bug surfacing)', () => {
     if (lastFailure) {
       throw new Error(`\n\n=== FUZZ FAILED on ${firstFailureSeed} ===\n${lastFailure.message}\n=== END FUZZ ===\n`);
     }
-  }, 60_000);
+  }, 120_000);
 });

@@ -5,43 +5,109 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  /* 明亮主题调色板 */
+  /* ==========================================================================
+     明亮主题调色板 (纯净高阶白底风格)
+     ========================================================================== */
   --bg-page: #f8fafc;
   --bg-card: #ffffff;
   --bg-subtle: #f1f5f9;
+  --bg-hover: #e2e8f0;
   --border-color: #e2e8f0;
   --border-subtle: #f1f5f9;
+
   --text-main: #0f172a;
   --text-muted: #64748b;
   --text-dim: #94a3b8;
-  --sidebar-bg: #0f172a;
-  --sidebar-border: #1e293b;
+
+  /* 侧边栏明亮模式 (全应用彻底统一为明亮视觉，告别死黑) */
+  --sidebar-bg: #ffffff;
+  --sidebar-border: #e2e8f0;
+  --sidebar-brand-title: #0f172a;
+  --sidebar-brand-tag: #64748b;
+  --sidebar-nav-color: #64748b;
+  --sidebar-nav-hover-bg: #f1f5f9;
+  --sidebar-nav-hover-color: #0f172a;
+  --sidebar-nav-active-bg: #eff6ff;
+  --sidebar-nav-active-color: #2563eb;
+  --sidebar-status-bg: #f8fafc;
+  --sidebar-status-border: #e2e8f0;
+  --sidebar-status-text: #1e293b;
+  --sidebar-status-desc: #64748b;
+
+  /* 顶栏明亮模式 */
   --topbar-bg: #ffffff;
   --topbar-border: #e2e8f0;
 
   /* 现代滚动条配色 (明亮模式 - 柔和半透明石板灰) */
   --scrollbar-thumb: rgba(148, 163, 184, 0.45);
   --scrollbar-thumb-hover: rgba(100, 116, 139, 0.75);
+
+  /* 卡片高亮与选中配色 */
+  --card-selected-bg: #eff6ff;
+  --card-selected-border: #93c5fd;
+  --card-selected-text: #1d4ed8;
+
+  /* 提示与状态面板 */
+  --panel-tag-bg: #eff6ff;
+  --panel-tag-border: #dbeafe;
+  --panel-tag-color: #2563eb;
+
+  --warn-box-bg: #fffbeb;
+  --warn-box-border: #fde68a;
+  --warn-box-text: #92400e;
 }
 
 html.dark {
-  /* 暗黑主题调色板 */
+  /* ==========================================================================
+     暗黑主题调色板 (现代深邃极客暗黑风格)
+     ========================================================================== */
   --bg-page: #0b0f19;
   --bg-card: #151d2f;
   --bg-subtle: #1c263c;
+  --bg-hover: #26334d;
   --border-color: #26334d;
   --border-subtle: #1e293b;
+
   --text-main: #f1f5f9;
   --text-muted: #94a3b8;
   --text-dim: #64748b;
+
+  /* 侧边栏暗黑模式 */
   --sidebar-bg: #090d16;
   --sidebar-border: #1a2333;
+  --sidebar-brand-title: #f1f5f9;
+  --sidebar-brand-tag: #64748b;
+  --sidebar-nav-color: #94a3b8;
+  --sidebar-nav-hover-bg: rgba(255, 255, 255, 0.06);
+  --sidebar-nav-hover-color: #f1f5f9;
+  --sidebar-nav-active-bg: #1e293b;
+  --sidebar-nav-active-color: #38bdf8;
+  --sidebar-status-bg: #151d2f;
+  --sidebar-status-border: #26334d;
+  --sidebar-status-text: #e2e8f0;
+  --sidebar-status-desc: #94a3b8;
+
+  /* 顶栏暗黑模式 */
   --topbar-bg: #111827;
   --topbar-border: #1e293b;
 
   /* 现代滚动条配色 (暗黑模式 - 现代微光半透明) */
   --scrollbar-thumb: rgba(255, 255, 255, 0.22);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.45);
+
+  /* 卡片高亮与选中配色 */
+  --card-selected-bg: rgba(37, 99, 235, 0.16);
+  --card-selected-border: #3b82f6;
+  --card-selected-text: #60a5fa;
+
+  /* 提示与状态面板 */
+  --panel-tag-bg: rgba(37, 99, 235, 0.15);
+  --panel-tag-border: rgba(37, 99, 235, 0.3);
+  --panel-tag-color: #60a5fa;
+
+  --warn-box-bg: rgba(245, 158, 11, 0.15);
+  --warn-box-border: rgba(245, 158, 11, 0.3);
+  --warn-box-text: #fbbf24;
 }
 
 /* 全局重置与视口严密保护 */
@@ -70,9 +136,7 @@ html, body {
   overflow: hidden !important;
 }
 
-/* ==========================================================================
-   1. 彻底禁用一切横向滚动条 (页面宽度自适应，杜绝溢出与水平滑块)
-   ========================================================================== */
+/* 绝对禁用一切横向滚动条出现 */
 ::-webkit-scrollbar:horizontal {
   display: none !important;
   width: 0 !important;
@@ -86,21 +150,16 @@ html, body {
   height: 0 !important;
 }
 
-/* ==========================================================================
-   2. 现代极简纵向滚动条 (全面替换 Windows 复古 17px 灰色块和上下小箭头)
-   ========================================================================== */
-/* 现代纤细纵向滚动条 (6px 优雅胶囊) */
+/* 现代极简纵向滚动条 */
 ::-webkit-scrollbar {
   width: 6px;
   height: 0px;
 }
 
-/* 轨道完全隐形透明，不侵占版面视觉 */
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-/* 圆角悬浮胶囊滑块 */
 ::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-thumb);
   border-radius: 9999px;
@@ -113,20 +172,17 @@ html, body {
   background-color: var(--scrollbar-thumb-hover);
 }
 
-/* 坚决移除 Windows 复古原生上下三角箭头按键 */
 ::-webkit-scrollbar-button {
   display: none !important;
   width: 0 !important;
   height: 0 !important;
 }
 
-/* 消除交汇处小方块 */
 ::-webkit-scrollbar-corner {
   display: none !important;
   background: transparent;
 }
 
-/* Firefox 现代平滑滚动条规范 */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;

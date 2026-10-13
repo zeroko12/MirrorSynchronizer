@@ -201,13 +201,13 @@ defineExpose({ showPrompt });
 
 <style scoped>
 .lock-warning {
-  background: #fff3e0;
-  border: 1px solid #ffcc80;
+  background: var(--warn-box-bg);
+  border: 1px solid var(--warn-box-border);
   border-radius: 6px;
   padding: 8px 12px;
   margin-bottom: 12px;
   font-size: 13px;
-  color: #bf7410;
+  color: var(--warn-box-text);
 }
 
 .lock-icon {

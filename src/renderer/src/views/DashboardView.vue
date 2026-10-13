@@ -420,7 +420,7 @@ function formatRelativeTime(ts: number | null): string {
 }
 
 .hero-sync-mode {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
 }
 
@@ -434,7 +434,7 @@ function formatRelativeTime(ts: number | null): string {
 .hero-desc {
   margin: 0;
   font-size: 13px;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .hero-actions {
@@ -481,12 +481,12 @@ function formatRelativeTime(ts: number | null): string {
 .path-label {
   font-size: 12px;
   font-weight: 600;
-  color: #475569;
+  color: var(--text-muted);
 }
 
 .path-meta {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--text-dim);
 }
 
 .path-value-text {
@@ -538,19 +538,19 @@ function formatRelativeTime(ts: number | null): string {
 }
 
 .stat-box:hover {
-  border-color: #cbd5e1;
-  background: #f8fafc;
+  border-color: var(--text-dim);
+  background: var(--bg-subtle);
 }
 
 .stat-title {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .stat-value {
   font-size: 20px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text-main);
 }
 
 .stat-value.small-text {
@@ -562,12 +562,12 @@ function formatRelativeTime(ts: number | null): string {
 .stat-unit {
   font-size: 12px;
   font-weight: normal;
-  color: #94a3b8;
+  color: var(--text-dim);
 }
 
 .stat-foot {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--text-dim);
 }
 
 /* 最近动态卡片 */
@@ -616,7 +616,7 @@ function formatRelativeTime(ts: number | null): string {
 
 .record-time {
   font-family: monospace;
-  color: #475569;
+  color: var(--text-muted);
   width: 160px;
 }
 
@@ -676,7 +676,7 @@ function formatRelativeTime(ts: number | null): string {
 
 .record-duration {
   font-family: monospace;
-  color: #94a3b8;
+  color: var(--text-dim);
   width: 60px;
   text-align: right;
 }

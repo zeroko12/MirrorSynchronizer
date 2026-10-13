@@ -324,9 +324,9 @@ onMounted(() => {
 .panel-tag {
   font-size: 10px;
   font-weight: 700;
-  color: #2563eb;
-  background: #eff6ff;
-  border: 1px solid #dbeafe;
+  color: var(--panel-tag-color);
+  background: var(--panel-tag-bg);
+  border: 1px solid var(--panel-tag-border);
   padding: 1px 6px;
   border-radius: 4px;
   font-family: monospace;
@@ -439,7 +439,8 @@ onMounted(() => {
 }
 
 .detail-val {
-  color: #0f172a;
+  font-size: 13px;
+  color: var(--text-main);
 }
 
 .monospace-text {
@@ -448,8 +449,12 @@ onMounted(() => {
 
 .path-text {
   word-break: break-all;
+  background: var(--bg-subtle);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  padding: 4px 8px;
+  border-radius: 4px;
   font-size: 12px;
-  color: #334155;
 }
 
 .change-tags {

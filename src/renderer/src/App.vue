@@ -50,6 +50,8 @@ function applyThemeClass() {
   } else {
     document.documentElement.classList.remove('dark');
   }
+  // 通知 Electron 原生窗口同步主题模式(切换 Windows 标题栏底色及原生边框)
+  window.api?.$invoke?.('theme:set', isDark.value ? 'dark' : 'light').catch(() => {});
 }
 
 async function refreshStatus() {
@@ -350,12 +352,14 @@ body {
 .brand-title {
   font-size: 14px;
   font-weight: 700;
-  color: #f8fafc;
+  color: var(--sidebar-brand-title);
+  transition: color 0.2s ease;
 }
 
 .brand-tag {
   font-size: 11px;
-  color: #64748b;
+  color: var(--sidebar-brand-tag);
+  transition: color 0.2s ease;
 }
 
 /* 菜单项竖直一列排布 */
@@ -379,7 +383,7 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: #94a3b8;
+  color: var(--sidebar-nav-color);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -389,20 +393,17 @@ body {
 }
 
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #f1f5f9;
+  background: var(--sidebar-nav-hover-bg);
+  color: var(--sidebar-nav-hover-color);
 }
 
 .nav-item.active {
-  background: #1e293b;
-  color: #38bdf8;
+  background: var(--sidebar-nav-active-bg);
+  color: var(--sidebar-nav-active-color);
   font-weight: 600;
 }
 
-.theme-dark .nav-item.active {
-  background: #1e293b;
-  color: #38bdf8;
-}
+
 
 .nav-icon {
   width: 16px;
@@ -414,11 +415,12 @@ body {
 .sidebar-status-card {
   margin: 12px;
   padding: 10px 12px;
-  background: #1e293b;
+  background: var(--sidebar-status-bg);
   border-radius: 6px;
-  border: 1px solid #334155;
+  border: 1px solid var(--sidebar-status-border);
   flex-shrink: 0;
   box-sizing: border-box;
+  transition: all 0.2s ease;
 }
 
 .status-indicator-line {
@@ -443,12 +445,14 @@ body {
 .status-txt {
   font-size: 12px;
   font-weight: 600;
-  color: #e2e8f0;
+  color: var(--sidebar-status-text);
+  transition: color 0.2s ease;
 }
 
 .status-desc {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--sidebar-status-desc);
+  transition: color 0.2s ease;
 }
 
 /* 右侧工作区 */

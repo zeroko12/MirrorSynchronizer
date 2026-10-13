@@ -1134,7 +1134,7 @@ function formatTime(ts: number | null): string {
 
 .card-subtitle {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .card-fields {
@@ -1166,7 +1166,7 @@ function formatTime(ts: number | null): string {
 
 .field-tip {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--text-dim);
   line-height: 1.4;
 }
 
@@ -1205,7 +1205,7 @@ function formatTime(ts: number | null): string {
 
 .unit-text {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 /* 模式单选 */
@@ -1228,12 +1228,12 @@ function formatTime(ts: number | null): string {
 }
 
 .mode-option-card:hover {
-  background: #f1f5f9;
+  background: var(--bg-hover);
 }
 
 .mode-option-card.selected {
-  background: #eff6ff;
-  border-color: #93c5fd;
+  background: var(--card-selected-bg);
+  border-color: var(--card-selected-border);
 }
 
 .mode-text {
@@ -1245,12 +1245,12 @@ function formatTime(ts: number | null): string {
 .mode-name {
   font-size: 13px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text-main);
 }
 
 .mode-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
   line-height: 1.4;
 }
 
@@ -1270,8 +1270,8 @@ function formatTime(ts: number | null): string {
 
 /* 忽略项列表 */
 .ignore-tags-panel {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 10px 12px;
 }
@@ -1310,19 +1310,18 @@ function formatTime(ts: number | null): string {
 }
 
 .preset-link-btn {
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
   border-radius: 4px;
   padding: 3px 8px;
   font-size: 11px;
-  color: #475569;
+  color: var(--text-main);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .preset-link-btn:hover {
-  background: #e2e8f0;
-  color: #0f172a;
+  background: var(--bg-hover);
 }
 
 /* 开关行 */
@@ -1331,8 +1330,8 @@ function formatTime(ts: number | null): string {
   align-items: center;
   justify-content: space-between;
   padding: 10px 12px;
-  background: #f8fafc;
-  border: 1px solid #f1f5f9;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
 }
 
@@ -1345,18 +1344,18 @@ function formatTime(ts: number | null): string {
 .toggle-title {
   font-size: 13px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--text-main);
 }
 
 .toggle-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 /* 局域网管理面板 */
 .remote-access-card {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 12px 14px;
 }
@@ -1376,18 +1375,18 @@ function formatTime(ts: number | null): string {
 .remote-title {
   font-size: 13px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--text-main);
 }
 
 .remote-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .remote-info-grid {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1402,7 +1401,7 @@ function formatTime(ts: number | null): string {
 
 .info-label {
   width: 70px;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .info-val-row {
@@ -1420,11 +1419,11 @@ function formatTime(ts: number | null): string {
 
 .new-pw-box {
   padding: 6px 10px;
-  background: #fef3c7;
-  border: 1px solid #fde68a;
+  background: var(--warn-box-bg);
+  border: 1px solid var(--warn-box-border);
   border-radius: 4px;
   font-size: 12px;
-  color: #92400e;
+  color: var(--warn-box-text);
   display: flex;
   align-items: center;
   gap: 10px;

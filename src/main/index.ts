@@ -39,7 +39,7 @@ import { createRemoteManager, type RemoteManager, type RemoteAccessInfo, listNet
 import { decide } from '../core/detector.js';
 
 const log = mainLog;
-const { app, BrowserWindow, dialog, ipcMain } = electron;
+const { app, BrowserWindow, dialog, ipcMain, nativeTheme } = electron;
 
 let currentConfig: AppConfig | null = null;
 let historyDB: HistoryDB | null = null;
@@ -101,6 +101,20 @@ async function ensureConfig(): Promise<AppConfig> {
 /* ============================ IPC handlers ============================ */
 
 function registerIpc(): void {
+  // 主题模式同步到 Electron 原生系统 (Windows 标题栏/系统菜单/窗口底色)
+  ipcMain.handle('theme:set', (_e, theme: 'dark' | 'light') => {
+    try {
+      nativeTheme.themeSource = theme;
+      const win = getMainWindow();
+      if (win && !win.isDestroyed()) {
+        win.setBackgroundColor(theme === 'dark' ? '#0b0f19' : '#f8fafc');
+      }
+    } catch (e) {
+      log.warn('[theme] Failed to set nativeTheme:', e);
+    }
+    return { ok: true };
+  });
+
   // P1: 状态查询
   ipcMain.handle('status:get', () => {
     const status = scheduler?.getStatus();

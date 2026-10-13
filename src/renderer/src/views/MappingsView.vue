@@ -647,9 +647,9 @@ const columns: DataTableColumns<FileMapping> = [
 .panel-tag {
   font-size: 10px;
   font-weight: 700;
-  color: #2563eb;
-  background: #eff6ff;
-  border: 1px solid #dbeafe;
+  color: var(--panel-tag-color);
+  background: var(--panel-tag-bg);
+  border: 1px solid var(--panel-tag-border);
   padding: 1px 6px;
   border-radius: 4px;
   font-family: monospace;
