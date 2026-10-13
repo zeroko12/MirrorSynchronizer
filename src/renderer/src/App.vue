@@ -365,6 +365,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  overflow-x: hidden !important;
   overflow-y: auto;
 }
 
@@ -538,7 +539,7 @@ body {
   flex: 1;
   height: calc(100vh - 56px);
   min-height: 0;
-  overflow: hidden;
+  overflow: hidden !important;
   position: relative;
   box-sizing: border-box;
 }

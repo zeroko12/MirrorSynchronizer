@@ -18,6 +18,10 @@
   --sidebar-border: #1e293b;
   --topbar-bg: #ffffff;
   --topbar-border: #e2e8f0;
+
+  /* 现代滚动条配色 (明亮模式 - 柔和半透明石板灰) */
+  --scrollbar-thumb: rgba(148, 163, 184, 0.45);
+  --scrollbar-thumb-hover: rgba(100, 116, 139, 0.75);
 }
 
 html.dark {
@@ -34,6 +38,17 @@ html.dark {
   --sidebar-border: #1a2333;
   --topbar-bg: #111827;
   --topbar-border: #1e293b;
+
+  /* 现代滚动条配色 (暗黑模式 - 现代微光半透明) */
+  --scrollbar-thumb: rgba(255, 255, 255, 0.22);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.45);
+}
+
+/* 全局重置与视口严密保护 */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 html, body {
@@ -41,7 +56,7 @@ html, body {
   padding: 0;
   width: 100vw;
   height: 100vh;
-  overflow: hidden;
+  overflow: hidden !important;
   user-select: none;
   background: var(--bg-page);
   color: var(--text-main);
@@ -52,5 +67,79 @@ html, body {
   width: 100vw;
   height: 100vh;
   display: flex;
-  overflow: hidden;
+  overflow: hidden !important;
+}
+
+/* ==========================================================================
+   1. 彻底禁用一切横向滚动条 (页面宽度自适应，杜绝溢出与水平滑块)
+   ========================================================================== */
+::-webkit-scrollbar:horizontal {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  opacity: 0 !important;
+  background: transparent !important;
+}
+
+.n-scrollbar-rail--horizontal {
+  display: none !important;
+  height: 0 !important;
+}
+
+/* ==========================================================================
+   2. 现代极简纵向滚动条 (全面替换 Windows 复古 17px 灰色块和上下小箭头)
+   ========================================================================== */
+/* 现代纤细纵向滚动条 (6px 优雅胶囊) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 0px;
+}
+
+/* 轨道完全隐形透明，不侵占版面视觉 */
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 圆角悬浮胶囊滑块 */
+::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 9999px;
+  min-height: 36px;
+  transition: background-color 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+/* 坚决移除 Windows 复古原生上下三角箭头按键 */
+::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* 消除交汇处小方块 */
+::-webkit-scrollbar-corner {
+  display: none !important;
+  background: transparent;
+}
+
+/* Firefox 现代平滑滚动条规范 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/* Naive UI 内部虚拟滚动条样式深度同步 */
+.n-scrollbar-rail--vertical .n-scrollbar-rail__scrollbar {
+  width: 6px !important;
+  border-radius: 9999px !important;
+  background-color: var(--scrollbar-thumb) !important;
+  transition: background-color 0.2s ease !important;
+}
+
+.n-scrollbar-rail--vertical .n-scrollbar-rail__scrollbar:hover {
+  background-color: var(--scrollbar-thumb-hover) !important;
 }

@@ -101,19 +101,18 @@ async function onDelete(b: BackupItem) {
 
 const columns: DataTableColumns<BackupItem> = [
   {
-    title: '时间',
+    title: '备份生成时间',
     key: 'createdAt',
-    width: 180,
-    fixed: 'left',
+    width: 165,
     render: (r) =>
       h('span', { style: 'font-family: ui-monospace' }, formatTime(r.createdAt)),
   },
-  { title: '文件数', key: 'fileCount', width: 90 },
-  { title: '大小', key: 'sizeBytes', width: 110, render: (r) => formatBytes(r.sizeBytes) },
+  { title: '文件数', key: 'fileCount', width: 80 },
+  { title: '占用空间', key: 'sizeBytes', width: 95, render: (r) => formatBytes(r.sizeBytes) },
   {
-    title: '状态',
+    title: '快照状态',
     key: 'status',
-    width: 100,
+    width: 85,
     render: (r) =>
       r._stale
         ? h(NTag, { type: 'warning', size: 'small' }, () => '文件已丢')
@@ -122,34 +121,33 @@ const columns: DataTableColumns<BackupItem> = [
           : h(NTag, { type: 'success', size: 'small' }, () => '可用'),
   },
   {
-    title: '来源',
+    title: '来源路径',
     key: 'sourceDir',
-    minWidth: 200,
+    minWidth: 160,
     ellipsis: { tooltip: true },
     render: (r) =>
-      h('span', { style: 'font-family: ui-monospace; font-size: 12px; color: #666' }, r.sourceDir || '(冷启动数据)'),
+      h('span', { style: 'font-family: ui-monospace; font-size: 12px; color: var(--text-muted)' }, r.sourceDir || '(冷启动数据)'),
   },
   {
-    title: '操作',
+    title: '快捷操作',
     key: 'actions',
-    width: 180,
-    fixed: 'right',
+    width: 155,
     render: (r) =>
-      h(NSpace, { size: 8 }, () => [
+      h(NSpace, { size: 6 }, () => [
         h(
           NPopconfirm,
           {
             onPositiveClick: () => onRollback(r),
-            positiveText: '确认回退',
+            positiveText: '确认还原',
             negativeText: '取消',
           },
           {
             trigger: () =>
-              h(NButton, { size: 'small', type: 'primary', disabled: !!r._stale }, () => '回退'),
+              h(NButton, { size: 'small', type: 'primary', disabled: !!r._stale }, () => '还原'),
             default: () =>
               h('div', { style: 'max-width: 280px' }, [
-                h('p', null, '确认回退到此备份?'),
-                h('p', { style: 'font-size: 12px; color: #666; margin: 4px 0' }, '当前 target 内容会被覆盖(覆盖前会自动做一份安全快照)'),
+                h('p', null, '确认还原到此历史备份?'),
+                h('p', { style: 'font-size: 12px; color: #666; margin: 4px 0' }, '当前程序目录会被覆盖(覆盖前会自动做一份安全快照)'),
                 h('p', { style: 'font-size: 12px; color: #999' }, `目标: ${r.targetDir}`),
               ]),
           },
@@ -306,10 +304,10 @@ async function load() {
 <style scoped>
 .ops-view-container {
   height: 100%;
+  overflow-x: hidden !important;
   overflow-y: auto;
   padding: 20px 24px;
   box-sizing: border-box;
-  scrollbar-gutter: stable;
 }
 
 .view-unified-wrap {

@@ -327,38 +327,52 @@ async function onToggleEnabled(m: FileMapping) {
 }
 
 const columns: DataTableColumns<FileMapping> = [
-  { title: '名称', key: 'name', width: 140, fixed: 'left' },
-  { title: '源', key: 'sourcePath', minWidth: 200, ellipsis: { tooltip: true } },
-  { title: '目标(相对)', key: 'targetRelpath', minWidth: 160, ellipsis: { tooltip: true } },
   {
-    title: '覆盖模式',
-    key: 'overwrite',
-    width: 110,
-    render: (r) => h(NTag, { size: 'small', type: r.overwrite ? 'warning' : 'info' }, () => r.overwrite ? '总是覆盖' : '仅缺失补'),
+    title: '名称',
+    key: 'name',
+    width: 130,
+    ellipsis: { tooltip: true },
   },
   {
-    title: '源不存在',
+    title: '源文件',
+    key: 'sourcePath',
+    minWidth: 160,
+    ellipsis: { tooltip: true },
+  },
+  {
+    title: '目标路径',
+    key: 'targetRelpath',
+    minWidth: 130,
+    ellipsis: { tooltip: true },
+  },
+  {
+    title: '覆盖策略',
+    key: 'overwrite',
+    width: 105,
+    render: (r) => h(NTag, { size: 'small', type: r.overwrite ? 'warning' : 'info' }, () => r.overwrite ? '总是覆盖' : '缺失补回'),
+  },
+  {
+    title: '源缺失处理',
     key: 'ifSourceMissing',
-    width: 110,
+    width: 105,
     render: (r) => {
-      const map = { skip: '跳过', keep: '保留', delete: '删除目标' };
+      const map = { skip: '跳过告警', keep: '静默保留', delete: '删除目标' };
       return h(NTag, { size: 'small' }, () => map[r.ifSourceMissing] ?? r.ifSourceMissing);
     },
   },
   {
     title: '启用',
     key: 'enabled',
-    width: 80,
+    width: 70,
     render: (r) => h(NSwitch, { value: r.enabled, size: 'small', onUpdateValue: () => onToggleEnabled(r) }),
   },
   {
     title: '操作',
     key: 'actions',
-    width: 240,
-    fixed: 'right',
+    width: 175,
     render: (r) =>
-      h(NSpace, { size: 8 }, () => [
-        h(NButton, { size: 'small', onClick: () => onTestMapping(r) }, () => '测试'),
+      h(NSpace, { size: 6 }, () => [
+        h(NButton, { size: 'small', onClick: () => onTestMapping(r) }, () => '探测'),
         h(NButton, { size: 'small', onClick: () => openEdit(r) }, () => '编辑'),
         h(
           NPopconfirm,
@@ -584,10 +598,10 @@ const columns: DataTableColumns<FileMapping> = [
 <style scoped>
 .ops-view-container {
   height: 100%;
+  overflow-x: hidden !important;
   overflow-y: auto;
   padding: 20px 24px;
   box-sizing: border-box;
-  scrollbar-gutter: stable;
 }
 
 .view-unified-wrap {

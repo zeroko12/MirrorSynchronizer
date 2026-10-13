@@ -354,10 +354,10 @@ function formatRelativeTime(ts: number | null): string {
 <style scoped>
 .user-dashboard-view {
   height: 100%;
+  overflow-x: hidden !important;
   overflow-y: auto;
-  padding: 20px 24px;
+  padding: 20px 24px 40px;
   box-sizing: border-box;
-  scrollbar-gutter: stable;
 }
 
 .dashboard-body {
@@ -463,6 +463,7 @@ function formatRelativeTime(ts: number | null): string {
 }
 
 .path-card {
+  min-width: 0;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -524,6 +525,7 @@ function formatRelativeTime(ts: number | null): string {
 }
 
 .stat-box {
+  min-width: 0;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -641,6 +643,7 @@ function formatRelativeTime(ts: number | null): string {
 
 .record-changes {
   flex: 1;
+  min-width: 0;
   display: flex;
   gap: 6px;
 }

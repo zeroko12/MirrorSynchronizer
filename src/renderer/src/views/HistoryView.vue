@@ -75,12 +75,22 @@ function formatTime(ts: number): string {
 }
 
 const columns: DataTableColumns<HistoryItem> = [
-  { title: '时间', key: 'startedAt', width: 160, fixed: 'left', render: (r) => formatTime(r.startedAt) },
-  { title: '耗时', key: 'durationMs', width: 80, render: (r) => `${r.durationMs}ms` },
   {
-    title: '变化',
+    title: '时间',
+    key: 'startedAt',
+    width: 145,
+    render: (r) => formatTime(r.startedAt),
+  },
+  {
+    title: '耗时',
+    key: 'durationMs',
+    width: 75,
+    render: (r) => `${r.durationMs}ms`,
+  },
+  {
+    title: '变动概览',
     key: 'changes',
-    width: 180,
+    width: 145,
     render: (r) =>
       h(NSpace, { size: 4 }, () => [
         r.addedCount > 0
@@ -97,10 +107,10 @@ const columns: DataTableColumns<HistoryItem> = [
           : null,
       ]),
   },
-  { title: '未变', key: 'unchangedCount', width: 70 },
-  { title: '映射', key: 'mapping', width: 100, render: (r) => `${r.mappingCopiedCount} 已拷` },
+  { title: '未变', key: 'unchangedCount', width: 65 },
+  { title: '映射保护', key: 'mapping', width: 90, render: (r) => `${r.mappingCopiedCount} 已拷` },
   {
-    title: '备份',
+    title: '快照备份',
     key: 'backupId',
     width: 80,
     render: (r) =>
@@ -111,24 +121,23 @@ const columns: DataTableColumns<HistoryItem> = [
   {
     title: '状态',
     key: 'status',
-    width: 80,
+    width: 75,
     render: (r) =>
       r.fatalError
         ? h(NTag, { type: 'error', size: 'small' }, () => '失败')
         : h(NTag, { type: 'success', size: 'small' }, () => '成功'),
   },
   {
-    title: '源 → 目标',
+    title: '同步路径',
     key: 'paths',
-    minWidth: 200,
+    minWidth: 150,
     ellipsis: { tooltip: true },
     render: (r) => `${r.sourceDir} → ${r.targetDir}`,
   },
   {
     title: '',
     key: 'actions',
-    width: 50,
-    fixed: 'right',
+    width: 55,
     render: (r) =>
       h(NButton, { size: 'tiny', text: true, type: 'primary', onClick: () => showDetails(r) }, () => '详情'),
   },
@@ -266,10 +275,10 @@ onMounted(() => {
 <style scoped>
 .ops-view-container {
   height: 100%;
+  overflow-x: hidden !important;
   overflow-y: auto;
   padding: 20px 24px;
   box-sizing: border-box;
-  scrollbar-gutter: stable;
 }
 
 .view-unified-wrap {

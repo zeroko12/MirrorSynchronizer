@@ -1053,10 +1053,10 @@ function formatTime(ts: number | null): string {
 <style scoped>
 .user-settings-view {
   height: 100%;
+  overflow-x: hidden !important;
   overflow-y: auto;
   padding: 20px 24px 60px;
   box-sizing: border-box;
-  scrollbar-gutter: stable;
 }
 
 .settings-wrap {
@@ -1171,6 +1171,7 @@ function formatTime(ts: number | null): string {
 }
 
 .field-input-box {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1190,6 +1191,7 @@ function formatTime(ts: number | null): string {
 }
 
 .field-sub-col {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
