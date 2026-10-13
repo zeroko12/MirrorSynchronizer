@@ -1,9 +1,11 @@
 <script setup lang="ts">
 /**
- * App.vue - 软件自动更新与同步工具
+ * App.vue - 自动更新工具主界面
  *
- * 定位: 面向用户的简洁、高效更新管理平台
- * 风格: 清爽、直观、低认知负担、操作快捷
+ * 核心布局:
+ * 1. 左侧导航栏: 顶天立地固定一整列 (高度 100vh), 绝对不随内容变长变短
+ * 2. 顶部状态栏: 固定高度 56px, 水平线与侧栏 Logo 严格齐平
+ * 3. 右侧主视口: 统一版心宽度, 切换 Tab 绝无任何布局跳动与变形
  */
 
 import { ref, computed, onMounted } from 'vue';
@@ -71,10 +73,14 @@ function handleNavigate(targetTab: 'dashboard' | 'settings' | 'backups' | 'histo
 </script>
 
 <template>
-  <n-config-provider :locale="zhCN" :date-locale="dateZhCN">
+  <n-config-provider
+    :locale="zhCN"
+    :date-locale="dateZhCN"
+    style="width: 100%; height: 100%; display: flex;"
+  >
     <n-message-provider>
       <div class="user-workbench">
-        <!-- 1. 左侧功能导航 -->
+        <!-- 1. 左侧功能导航 (贯穿全屏高度一列到底) -->
         <aside class="workbench-sidebar">
           <div class="sidebar-brand">
             <div class="brand-badge">
@@ -90,6 +96,7 @@ function handleNavigate(targetTab: 'dashboard' | 'settings' | 'backups' | 'histo
             </div>
           </div>
 
+          <!-- 菜单按钮纵向一列排布 -->
           <nav class="sidebar-menu">
             <button
               class="nav-item"
@@ -154,7 +161,7 @@ function handleNavigate(targetTab: 'dashboard' | 'settings' | 'backups' | 'histo
             </button>
           </nav>
 
-          <!-- 底部运行状态 -->
+          <!-- 底部常驻运行状态 -->
           <div class="sidebar-status-card">
             <div class="status-indicator-line">
               <span class="status-dot" :class="{ active: status?.running }" />
@@ -166,9 +173,9 @@ function handleNavigate(targetTab: 'dashboard' | 'settings' | 'backups' | 'histo
           </div>
         </aside>
 
-        <!-- 2. 右侧主操作区 -->
+        <!-- 2. 右侧主工作区 (顶天立地, 高度绝对锁定) -->
         <div class="workbench-main">
-          <!-- 顶栏 -->
+          <!-- 顶栏 (高度固定 56px, 与侧边栏 Logo 严格平齐) -->
           <header class="main-topbar">
             <div class="topbar-heading">
               <h1 class="heading-title">{{ currentViewMeta.title }}</h1>
@@ -205,7 +212,7 @@ function handleNavigate(targetTab: 'dashboard' | 'settings' | 'backups' | 'histo
             </div>
           </header>
 
-          <!-- 视图页面 -->
+          <!-- 视图内容承载区 (占满剩余高度, 内部子页面各自自适应滚动) -->
           <main class="main-content">
             <DashboardView v-show="tab === 'dashboard'" @navigate="handleNavigate" />
             <SettingsView v-show="tab === 'settings'" />
@@ -222,38 +229,44 @@ function handleNavigate(targetTab: 'dashboard' | 'settings' | 'backups' | 'histo
 </template>
 
 <style>
-/* 全局基础设置 */
+/* 全局视口严密锁定 */
 html,
 body {
   margin: 0;
   padding: 0;
-  height: 100%;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
   background: #f8fafc;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   color: #1e293b;
-  overflow: hidden;
   user-select: none;
 }
 
 #app {
+  width: 100vw;
   height: 100vh;
   display: flex;
+  overflow: hidden;
 }
 
 .user-workbench {
   display: flex;
-  width: 100%;
-  height: 100%;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
 }
 
-/* 侧边栏 */
+/* 侧边栏: 必须顶天立地, 占满 100vh, 绝对不随内容变长变短 */
 .workbench-sidebar {
   width: 200px;
+  height: 100vh;
   background: #0f172a;
   border-right: 1px solid #1e293b;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .sidebar-brand {
@@ -263,6 +276,8 @@ body {
   align-items: center;
   gap: 10px;
   border-bottom: 1px solid #1e293b;
+  flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .brand-badge {
@@ -297,18 +312,19 @@ body {
   color: #64748b;
 }
 
-/* 菜单 */
+/* 菜单项竖直一列排布 */
 .sidebar-menu {
   flex: 1;
   padding: 14px 10px;
   display: flex;
   flex-direction: column;
   gap: 4px;
+  overflow-y: auto;
 }
 
 .nav-item {
   width: 100%;
-  height: 38px;
+  height: 40px;
   padding: 0 12px;
   border-radius: 6px;
   background: transparent;
@@ -322,6 +338,7 @@ body {
   cursor: pointer;
   transition: all 0.15s ease;
   text-align: left;
+  box-sizing: border-box;
 }
 
 .nav-item:hover {
@@ -348,6 +365,8 @@ body {
   background: #1e293b;
   border-radius: 6px;
   border: 1px solid #334155;
+  flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .status-indicator-line {
@@ -383,10 +402,13 @@ body {
 /* 右侧工作区 */
 .workbench-main {
   flex: 1;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   min-width: 0;
   background: #f8fafc;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .main-topbar {
@@ -398,6 +420,7 @@ body {
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .topbar-heading {
@@ -434,8 +457,10 @@ body {
 
 .main-content {
   flex: 1;
+  height: calc(100vh - 56px);
   min-height: 0;
   overflow: hidden;
   position: relative;
+  box-sizing: border-box;
 }
 </style>

@@ -156,7 +156,8 @@ onMounted(() => {
 
 <template>
   <div class="ops-view-container">
-    <div class="ops-panel-card">
+    <div class="view-unified-wrap">
+      <div class="ops-panel-card">
       <!-- 运维面板头部 -->
       <div class="panel-header">
         <div class="header-left">
@@ -222,6 +223,7 @@ onMounted(() => {
           <n-button size="small" :disabled="page >= totalPages" @click="page++; load()">下一页</n-button>
         </div>
       </div>
+      </div>
     </div>
 
     <!-- 事务详情 Modal -->
@@ -264,8 +266,16 @@ onMounted(() => {
 <style scoped>
 .ops-view-container {
   height: 100%;
+  overflow-y: auto;
   padding: 20px 24px;
   box-sizing: border-box;
+  scrollbar-gutter: stable;
+}
+
+.view-unified-wrap {
+  max-width: 1000px;
+  margin: 0 auto;
+  height: 100%;
   display: flex;
   flex-direction: column;
 }

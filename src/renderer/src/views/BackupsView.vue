@@ -203,7 +203,8 @@ async function load() {
 
 <template>
   <div class="ops-view-container">
-    <div class="ops-panel-card">
+    <div class="view-unified-wrap">
+      <div class="ops-panel-card">
       <!-- 运维面板头部 -->
       <div class="panel-header">
         <div class="header-left">
@@ -297,6 +298,7 @@ async function load() {
           🛡️ 安全提示: 点击"回退"还原前，系统会自动为您备份当前的文件状态，任意时刻均可二次还原，数据安全有保障。
         </span>
       </div>
+      </div>
     </div>
   </div>
 </template>
@@ -304,8 +306,16 @@ async function load() {
 <style scoped>
 .ops-view-container {
   height: 100%;
+  overflow-y: auto;
   padding: 20px 24px;
   box-sizing: border-box;
+  scrollbar-gutter: stable;
+}
+
+.view-unified-wrap {
+  max-width: 1000px;
+  margin: 0 auto;
+  height: 100%;
   display: flex;
   flex-direction: column;
 }

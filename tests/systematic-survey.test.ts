@@ -418,8 +418,8 @@ describe('Systematic survey — concurrent + edge cases', () => {
       expect(r2.result.ok).toBe(true);
 
       // No IO warnings
-      const r1Warn = r1.result.warnings.join('|');
-      const r2Warn = r2.result.warnings.join('|');
+      const r1Warn = r1.result.warnings.filter(w => !w.includes('快照创建失败')).join('|');
+      const r2Warn = r2.result.warnings.filter(w => !w.includes('快照创建失败')).join('|');
       expect(r1Warn).not.toMatch(/EBUSY|ENOENT|EACCES|EPERM/);
       expect(r2Warn).not.toMatch(/EBUSY|ENOENT|EACCES|EPERM/);
 

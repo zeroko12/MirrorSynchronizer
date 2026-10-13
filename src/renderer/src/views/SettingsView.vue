@@ -1056,10 +1056,11 @@ function formatTime(ts: number | null): string {
   overflow-y: auto;
   padding: 20px 24px 60px;
   box-sizing: border-box;
+  scrollbar-gutter: stable;
 }
 
 .settings-wrap {
-  max-width: 960px;
+  max-width: 1000px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;

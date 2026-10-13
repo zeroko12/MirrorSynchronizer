@@ -376,7 +376,8 @@ const columns: DataTableColumns<FileMapping> = [
 
 <template>
   <div class="ops-view-container">
-    <div class="ops-panel-card">
+    <div class="view-unified-wrap">
+      <div class="ops-panel-card">
       <!-- 面板运维头部 -->
       <div class="panel-header">
         <div class="header-left">
@@ -436,6 +437,7 @@ const columns: DataTableColumns<FileMapping> = [
         <span class="footer-tip">
           💡 提示: 已启用的文件在更新后会自动保留本地修改，确保您的个性化配置不丢失。
         </span>
+      </div>
       </div>
     </div>
 
@@ -582,8 +584,16 @@ const columns: DataTableColumns<FileMapping> = [
 <style scoped>
 .ops-view-container {
   height: 100%;
+  overflow-y: auto;
   padding: 20px 24px;
   box-sizing: border-box;
+  scrollbar-gutter: stable;
+}
+
+.view-unified-wrap {
+  max-width: 1000px;
+  margin: 0 auto;
+  height: 100%;
   display: flex;
   flex-direction: column;
 }

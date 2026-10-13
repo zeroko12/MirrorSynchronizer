@@ -357,10 +357,11 @@ function formatRelativeTime(ts: number | null): string {
   overflow-y: auto;
   padding: 20px 24px;
   box-sizing: border-box;
+  scrollbar-gutter: stable;
 }
 
 .dashboard-body {
-  max-width: 960px;
+  max-width: 1000px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
