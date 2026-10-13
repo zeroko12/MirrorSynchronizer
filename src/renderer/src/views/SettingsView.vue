@@ -231,42 +231,9 @@ const togglingRemote = ref(false);
 const resettingPassword = ref(false);
 const newlyResetPassword = ref<string | null>(null);
 
-const advancedMode = ref(false);
-let versionClickCount = 0;
-let versionClickTimer: number | null = null;
-
-function onVersionClick() {
-  versionClickCount += 1;
-  if (versionClickTimer) clearTimeout(versionClickTimer);
-  versionClickTimer = window.setTimeout(() => {
-    versionClickCount = 0;
-    versionClickTimer = null;
-  }, 3000);
-  if (versionClickCount >= 5) {
-    versionClickCount = 0;
-    if (versionClickTimer) {
-      clearTimeout(versionClickTimer);
-      versionClickTimer = null;
-    }
-    toggleAdvanced();
-  }
-}
-
-function toggleAdvanced() {
-  advancedMode.value = !advancedMode.value;
-  if (advancedMode.value) {
-    message.info('已开启高级模式');
-    void loadNetworkIPs();
-  } else {
-    message.info('已关闭高级模式');
-  }
-}
-
-function onGlobalKeydown(e: KeyboardEvent) {
-  if (e.shiftKey && e.ctrlKey && (e.key === 'L' || e.key === 'l')) {
-    e.preventDefault();
-    toggleAdvanced();
-  }
+async function loadRemoteInfo() {
+  const info = await tryLog('getRemoteInfo', () => getApi().getRemoteInfo());
+  if (info) remoteInfo.value = info;
 }
 
 async function loadNetworkIPs() {
@@ -302,6 +269,9 @@ async function onToggleRemote(enabled: boolean) {
     const result = await getApi().setRemoteEnabled(enabled);
     if (result.ok && result.info) {
       remoteInfo.value = result.info;
+      if (enabled) {
+        await loadNetworkIPs();
+      }
       message.success(enabled ? '已启用局域网管理' : '已关闭局域网管理');
     } else {
       message.error(result.error ?? '操作失败');
@@ -348,7 +318,6 @@ async function handleSaveCustomPassword() {
 }
 
 async function onResetPassword() {
-  if (!confirm('重置密码会断开所有已连接的设备，确定吗?')) return;
   resettingPassword.value = true;
   try {
     const result = await getApi().resetRemotePassword();
@@ -482,6 +451,10 @@ const networkAlert = computed(() => {
   return null;
 });
 
+const emit = defineEmits<{
+  (e: 'navigate', tab: 'remote'): void;
+}>();
+
 const message = useMessage();
 
 onMounted(async () => {
@@ -507,7 +480,8 @@ onMounted(async () => {
       preflightRelPath.value = info.relPath;
     }
   });
-  window.addEventListener('keydown', onGlobalKeydown);
+  await loadRemoteInfo();
+  await loadNetworkIPs();
 });
 
 async function onTogglePopup(enabled: boolean) {
@@ -547,16 +521,15 @@ async function onToggleApplyMappingsImmediately(enabled: boolean) {
 
 onUnmounted(() => {
   if (countdownTimer) clearInterval(countdownTimer);
-  if (versionClickTimer) clearTimeout(versionClickTimer);
-  window.removeEventListener('keydown', onGlobalKeydown);
 });
 
 usePolling(refreshStatus, UI_STATUS_POLL_MS, { immediate: false });
-usePolling(() => {
-  void tryLog('getRemoteInfo', () => getApi().getRemoteInfo()).then((info) => {
-    remoteInfo.value = info ?? null;
-  });
-}, 10_000, { immediate: false });
+usePolling(async () => {
+  await loadRemoteInfo();
+  if (remoteInfo.value?.enabled && networkIPs.value.length === 0) {
+    await loadNetworkIPs();
+  }
+}, 5_000, { immediate: false });
 
 
 
@@ -928,54 +901,26 @@ function formatTime(ts: number | null): string {
           </div>
         </div>
 
-        <!-- 卡片 4: 系统功能与局域网管理 -->
+        <!-- 卡片 4: 局域网网页管理 (远程协同) -->
         <div class="setting-card">
           <div class="card-title-group">
-            <h3 class="card-title">系统与辅助功能</h3>
-            <span class="card-subtitle">开机自启、弹窗提醒与局域网设备管理</span>
+            <div class="card-title-header-flex">
+              <div>
+                <h3 class="card-title">局域网网页管理 (远程协同)</h3>
+                <span class="card-subtitle">开启后，同一局域网的手机、平板或其他电脑可通过浏览器访问本工具</span>
+              </div>
+              <n-button size="small" secondary @click="emit('navigate', 'remote')">
+                打开独立管理面板 &gt;
+              </n-button>
+            </div>
           </div>
 
           <div class="card-fields">
-            <div class="toggle-row">
-              <div class="toggle-text">
-                <span class="toggle-title">开机自动启动</span>
-                <span class="toggle-desc">电脑开机时自动在后台启动本工具，持续保持更新</span>
-              </div>
-              <n-switch
-                :value="autostartEnabled"
-                :loading="autostartLoading"
-                @update:value="onToggleAutostart"
-              />
-            </div>
-
-            <div class="toggle-row">
-              <div class="toggle-text">
-                <span class="toggle-title">发现新版本时弹窗提示</span>
-                <span class="toggle-desc">检测到源端有更新时弹出对话框通知您确认</span>
-              </div>
-              <n-switch
-                :value="popupEnabled"
-                @update:value="onTogglePopup"
-              />
-            </div>
-
-            <div class="toggle-row">
-              <div class="toggle-text">
-                <span class="toggle-title">规则保护即时生效</span>
-                <span class="toggle-desc">在文件保护页面添加新规则后，立即自动执行一次</span>
-              </div>
-              <n-switch
-                :value="config.applyMappingsImmediately ?? true"
-                @update:value="onToggleApplyMappingsImmediately"
-              />
-            </div>
-
-            <!-- 局域网访问面板 -->
             <div class="remote-access-card">
               <div class="remote-top">
                 <div class="remote-text">
-                  <span class="remote-title">局域网网页管理</span>
-                  <span class="remote-desc">开启后，同一局域网的手机或电脑可通过浏览器访问本工具</span>
+                  <span class="remote-title">服务运行状态</span>
+                  <span class="remote-desc">通过后台轻量服务提供局域网网页控制台</span>
                 </div>
                 <n-switch
                   :value="remoteInfo?.enabled ?? false"
@@ -1091,8 +1036,53 @@ function formatTime(ts: number | null): string {
           </div>
         </div>
 
-        <div class="footer-note" @click="onVersionClick">
-          版本: v0.3.4
+        <!-- 卡片 5: 系统与运行选项 -->
+        <div class="setting-card">
+          <div class="card-title-group">
+            <h3 class="card-title">系统与运行选项</h3>
+            <span class="card-subtitle">开机自启、新版本桌面提醒与保护规则即时生效</span>
+          </div>
+
+          <div class="card-fields">
+            <div class="toggle-row">
+              <div class="toggle-text">
+                <span class="toggle-title">开机自动启动</span>
+                <span class="toggle-desc">电脑开机时自动在后台启动本工具，持续保持更新</span>
+              </div>
+              <n-switch
+                :value="autostartEnabled"
+                :loading="autostartLoading"
+                @update:value="onToggleAutostart"
+              />
+            </div>
+
+            <div class="toggle-row">
+              <div class="toggle-text">
+                <span class="toggle-title">发现新版本时弹窗提示</span>
+                <span class="toggle-desc">检测到源端有更新时弹出对话框通知您确认</span>
+              </div>
+              <n-switch
+                :value="popupEnabled"
+                @update:value="onTogglePopup"
+              />
+            </div>
+
+            <div class="toggle-row">
+              <div class="toggle-text">
+                <span class="toggle-title">规则保护即时生效</span>
+                <span class="toggle-desc">在文件保护页面添加新规则后，立即自动执行一次</span>
+              </div>
+              <n-switch
+                :value="config.applyMappingsImmediately ?? true"
+                @update:value="onToggleApplyMappingsImmediately"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div class="footer-note">
+          <span>自动更新工具 · 专注可靠安全的文件同步</span>
+          <span class="version-hint">v1.2.0</span>
         </div>
       </div>
     </n-spin>
@@ -1271,6 +1261,13 @@ function formatTime(ts: number | null): string {
   border-radius: 8px;
   padding: 20px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+
+.card-title-header-flex {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
 }
 
 .card-title-group {

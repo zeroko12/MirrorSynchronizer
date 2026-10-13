@@ -21,6 +21,7 @@ import {
 } from 'naive-ui';
 import DashboardView from './views/DashboardView.vue';
 import SettingsView from './views/SettingsView.vue';
+import RemoteView from './views/RemoteView.vue';
 import BackupsView from './views/BackupsView.vue';
 import HistoryView from './views/HistoryView.vue';
 import MappingsView from './views/MappingsView.vue';
@@ -30,7 +31,7 @@ import { usePolling } from './composables/usePolling';
 import { UI_STATUS_POLL_MS } from '@core/constants';
 import { tryLog } from './utils/try-log';
 
-const tab = ref<'dashboard' | 'settings' | 'mappings' | 'backups' | 'history'>('dashboard');
+const tab = ref<'dashboard' | 'settings' | 'remote' | 'mappings' | 'backups' | 'history'>('dashboard');
 const updateDialogRef = ref<InstanceType<typeof UpdateDialog> | null>(null);
 const status = ref<StatusInfo | null>(null);
 const syncing = ref(false);
@@ -72,6 +73,7 @@ onMounted(() => {
 const viewTitles: Record<string, { title: string; subtitle: string }> = {
   dashboard: { title: '状态看板', subtitle: '查看当前更新状态与快捷操作' },
   settings: { title: '常规设置', subtitle: '配置更新来源、目标目录及同步方式' },
+  remote: { title: '局域网管理', subtitle: '局域网网页协同、多网卡地址与访问安全设置' },
   mappings: { title: '文件保护', subtitle: '保护本机私有配置文件，避免被更新覆盖' },
   backups: { title: '历史备份', subtitle: '查看历史版本并可一键还原' },
   history: { title: '同步记录', subtitle: '查看历史同步详情与变动明细' },
@@ -89,7 +91,7 @@ async function handleHeaderQuickSync() {
   }
 }
 
-function handleNavigate(targetTab: 'dashboard' | 'settings' | 'backups' | 'history' | 'mappings') {
+function handleNavigate(targetTab: 'dashboard' | 'settings' | 'remote' | 'backups' | 'history' | 'mappings') {
   tab.value = targetTab;
 }
 </script>
@@ -145,6 +147,20 @@ function handleNavigate(targetTab: 'dashboard' | 'settings' | 'backups' | 'histo
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
               <span>常规设置</span>
+            </button>
+
+            <button
+              class="nav-item"
+              :class="{ active: tab === 'remote' }"
+              @click="tab = 'remote'"
+            >
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M5 12.55a11 11 0 0 1 14.08 0" />
+                <path d="M1.42 9a16 16 0 0 1 21.16 0" />
+                <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+                <line x1="12" y1="20" x2="12.01" y2="20" stroke-width="2.5" />
+              </svg>
+              <span>局域网管理</span>
             </button>
 
             <button
@@ -262,7 +278,8 @@ function handleNavigate(targetTab: 'dashboard' | 'settings' | 'backups' | 'histo
           <!-- 视图内容承载区 (占满剩余高度, 内部子页面各自自适应滚动) -->
           <main class="main-content">
             <DashboardView v-show="tab === 'dashboard'" @navigate="handleNavigate" />
-            <SettingsView v-show="tab === 'settings'" />
+            <SettingsView v-show="tab === 'settings'" @navigate="handleNavigate" />
+            <RemoteView v-show="tab === 'remote'" />
             <MappingsView v-show="tab === 'mappings'" />
             <BackupsView v-show="tab === 'backups'" />
             <HistoryView v-show="tab === 'history'" />

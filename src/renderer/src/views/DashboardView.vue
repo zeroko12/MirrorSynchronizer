@@ -15,7 +15,7 @@ import {
   NPopconfirm,
   useMessage,
 } from 'naive-ui';
-import { getApi, type StatusInfo, type BackupItem, type HistoryItem } from '../api';
+import { getApi, type StatusInfo, type BackupItem, type HistoryItem, type RemoteAccessInfo } from '../api';
 import { useConfig } from '../composables/useConfig';
 import { usePolling } from '../composables/usePolling';
 import { UI_STATUS_POLL_MS } from '@core/constants';
@@ -23,7 +23,7 @@ import { tryLog } from '../utils/try-log';
 import { labelOf } from '@core/labels';
 
 const emit = defineEmits<{
-  (e: 'navigate', tab: 'settings' | 'mappings' | 'backups' | 'history'): void;
+  (e: 'navigate', tab: 'settings' | 'mappings' | 'backups' | 'history' | 'remote'): void;
 }>();
 
 const message = useMessage();
@@ -34,6 +34,7 @@ const backups = ref<BackupItem[]>([]);
 const recentHistory = ref<HistoryItem[]>([]);
 const fileCount = ref<{ source: number; target: number } | null>(null);
 const pendingApplyCount = ref(0);
+const remoteInfo = ref<RemoteAccessInfo | null>(null);
 
 const syncing = ref(false);
 const applyingStaging = ref(false);
@@ -307,6 +308,16 @@ function formatRelativeTime(ts: number | null): string {
             <span class="stat-value">{{ config?.fileMappings?.length ?? 0 }} <span class="stat-unit">条</span></span>
             <span class="stat-foot">免受更新覆盖</span>
           </div>
+
+          <div class="stat-box" @click="emit('navigate', 'remote')">
+            <span class="stat-title">局域网网页协同</span>
+            <span class="stat-value" :class="{ 'status-online-text': remoteInfo?.enabled }">
+              {{ remoteInfo?.enabled ? '服务运行中' : '服务已停止' }}
+            </span>
+            <span class="stat-foot">
+              {{ remoteInfo?.enabled ? `端口 ${remoteInfo.port || 52331} · 点击查看` : '点击开启局域网协同' }}
+            </span>
+          </div>
         </div>
 
         <!-- 4. 最近同步记录 -->
@@ -520,7 +531,7 @@ function formatRelativeTime(ts: number | null): string {
 /* 快捷指标网格 */
 .quick-stats-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
 }
 
@@ -545,6 +556,10 @@ function formatRelativeTime(ts: number | null): string {
 .stat-title {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.status-online-text {
+  color: #10b981 !important;
 }
 
 .stat-value {
