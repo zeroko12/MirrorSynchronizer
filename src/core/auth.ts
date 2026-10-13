@@ -47,6 +47,14 @@ export function resolveEffectiveAuth(
     };
   }
 
+  if (auth.kind === 'credentials') {
+    return {
+      kind: 'credentials',
+      account: auth.account,
+      secret: envSecret !== undefined ? envSecret : (auth.secret ?? ''),
+    };
+  }
+
   return auth;
 }
 
@@ -72,6 +80,22 @@ export function buildAuthHeaders(auth?: SourceAuth): Record<string, string> | un
       headers['CF-Access-Client-Secret'] = auth.clientSecret;
     }
     return Object.keys(headers).length > 0 ? headers : undefined;
+  }
+
+  if (auth.kind === 'credentials') {
+    const user = auth.account ?? '';
+    const pass = auth.secret ?? '';
+    const token = Buffer.from(`${user}:${pass}`).toString('base64');
+    const headers: Record<string, string> = {
+      Authorization: `Basic ${token}`,
+    };
+    if (user) {
+      headers['CF-Access-Client-Id'] = user;
+    }
+    if (pass) {
+      headers['CF-Access-Client-Secret'] = pass;
+    }
+    return headers;
   }
 
   return undefined;

@@ -43,10 +43,10 @@ function loadAppIcon() {
 export function createWindow(): void {
   const icon = loadAppIcon();
   mainWindow = new BrowserWindow({
-    width: 760,
-    height: 600,
-    minWidth: 600,
-    minHeight: 400,
+    width: 960,
+    height: 680,
+    minWidth: 640,
+    minHeight: 450,
     show: false,
     // 不自动隐藏 — 顶部"关于"菜单用户得能直接看到
     autoHideMenuBar: false,

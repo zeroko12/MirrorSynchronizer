@@ -39,6 +39,20 @@ describe('buildAuthHeaders', () => {
       'CF-Access-Client-Secret': 'service-client-secret-abc',
     });
   });
+
+  it('generates both Basic Auth and Cloudflare Access headers for universal credentials', () => {
+    const auth: SourceAuth = {
+      kind: 'credentials',
+      account: 'my-service-account',
+      secret: 'my-secret-key-999',
+    };
+    const headers = buildAuthHeaders(auth);
+    expect(headers).toEqual({
+      Authorization: 'Basic ' + Buffer.from('my-service-account:my-secret-key-999').toString('base64'),
+      'CF-Access-Client-Id': 'my-service-account',
+      'CF-Access-Client-Secret': 'my-secret-key-999',
+    });
+  });
 });
 
 describe('resolveEffectiveAuth', () => {

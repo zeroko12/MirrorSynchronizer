@@ -132,6 +132,11 @@ export class ConfigManager {
             errors.push('sourceAuth (cf-access) 的 clientId 不能为空');
           }
           break;
+        case 'credentials':
+          if (!config.sourceAuth.account || !config.sourceAuth.account.trim()) {
+            errors.push('sourceAuth (credentials) 的 account 不能为空');
+          }
+          break;
         default:
           errors.push(`未知 sourceAuth.kind: ${(config.sourceAuth as any)?.kind}`);
       }

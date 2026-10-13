@@ -128,7 +128,8 @@ export type ConflictPolicy = 'rename-target' | 'source-wins' | 'target-wins' | '
  */
 export type SourceAuth =
   | { kind: 'basic'; username: string; password?: string }
-  | { kind: 'cf-access'; clientId: string; clientSecret?: string };
+  | { kind: 'cf-access'; clientId: string; clientSecret?: string }
+  | { kind: 'credentials'; account: string; secret?: string };
 
 export interface AppConfig {
   sourceDir: string;
