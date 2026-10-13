@@ -26,7 +26,6 @@ import {
   NRadio,
   NRadioGroup,
   NPopconfirm,
-  NEmpty,
   NAlert,
   NSpin,
   useMessage,
@@ -376,57 +375,87 @@ const columns: DataTableColumns<FileMapping> = [
 </script>
 
 <template>
-  <div class="page">
-    <header class="hero">
-      <h1>本地文件保护与映射</h1>
-      <p class="subtitle">
-        保护用户专属配置或独立存档: 更新时自动豁免删除, 目标缺失时自动补回
-      </p>
-    </header>
+  <div class="ops-view-container">
+    <div class="ops-panel-card">
+      <!-- 面板运维头部 -->
+      <div class="panel-header">
+        <div class="header-left">
+          <div class="header-title-row">
+            <span class="panel-tag">PROTECTION & INJECTION</span>
+            <span class="panel-title">文件映射与保护规则</span>
+          </div>
+          <span class="panel-subtitle">
+            共 {{ (config.fileMappings ?? []).length }} 条生效规则 · 映射目标文件享有豁免保护，绝不会被镜像流水线误删
+          </span>
+        </div>
+        <div class="header-actions">
+          <n-button type="primary" size="medium" @click="openAdd">
+            <template #icon>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </template>
+            新建保护规则
+          </n-button>
+        </div>
+      </div>
 
-    <div class="toolbar">
-      <span class="hint">
-        共 {{ (config.fileMappings ?? []).length }} 条规则 ·
-        启用的会在每次同步后追加执行
-      </span>
-      <n-button type="primary" size="small" @click="openAdd">+ 添加规则</n-button>
+      <!-- 面板主体表格 -->
+      <div class="panel-body">
+        <div v-if="(config.fileMappings ?? []).length === 0" class="empty-state-box">
+          <svg class="empty-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          </svg>
+          <span class="empty-title">当前尚未配置任何文件映射规则</span>
+          <span class="empty-desc">
+            若目标部署目录含有特有的本地配置文件、许可证授权文件或外部模板，可在此添加规则以防止被同步覆盖或清除。
+          </span>
+          <n-button type="primary" size="small" @click="openAdd" style="margin-top: 8px">
+            立即创建第一条规则
+          </n-button>
+        </div>
+
+        <div v-else class="table-container">
+          <n-data-table
+            :columns="columns"
+            :data="config.fileMappings ?? []"
+            :row-key="(r: FileMapping) => r.id"
+            :pagination="false"
+            size="small"
+            :bordered="false"
+            table-layout="fixed"
+            flex-height
+            style="width: 100%; min-width: 0; height: 100%"
+          />
+        </div>
+      </div>
+
+      <!-- 面板底部状态栏 -->
+      <div class="panel-footer">
+        <span class="footer-tip">
+          💡 提示: 启用的规则将在每次主同步完成后即刻触发。规则源文件支持本地绝对路径、UNC 共享及 HTTP/WebDAV 远程拉取。
+        </span>
+      </div>
     </div>
 
-    <n-empty
-      v-if="(config.fileMappings ?? []).length === 0"
-      description="还没有映射规则,点上方 + 添加"
-      style="margin-top: 60px"
-    />
-
-    <div v-else class="table-wrap">
-      <n-data-table
-        :columns="columns"
-        :data="config.fileMappings ?? []"
-        :row-key="(r: FileMapping) => r.id"
-        :pagination="false"
-        size="small"
-        :bordered="false"
-        table-layout="fixed"
-        flex-height
-        style="width: 100%; min-width: 0; height: 100%"
-      />
-    </div>
-
+    <!-- 添加/编辑规则 Modal -->
     <n-modal
       v-model:show="showModal"
       preset="card"
-      :title="editing ? '编辑映射规则' : '添加映射规则'"
-      style="max-width: 580px"
+      :title="editing ? '编辑保护映射规则' : '新建保护映射规则'"
+      style="max-width: 620px"
     >
-      <n-form label-placement="top">
-        <n-form-item label="名称(便于识别)">
-          <n-input v-model:value="form.name" placeholder="例:本地配置覆盖" />
+      <n-form label-placement="top" class="ops-modal-form">
+        <n-form-item label="规则标识名称">
+          <n-input v-model:value="form.name" placeholder="例如: 本地数据库连接配置保护 (app.json)" />
         </n-form-item>
-        <n-form-item label="源文件(本地 / SMB / HTTP / WebDAV)">
-          <n-space :wrap="false" :size="8" style="width: 100%">
+        <n-form-item label="源文件路径 (本地 / SMB / HTTP / WebDAV)">
+          <div class="modal-input-row">
             <n-input
               v-model:value="form.sourcePath"
               :placeholder="sourcePathPlaceholder"
+              class="monospace-text"
               style="flex: 1; min-width: 0"
             />
             <n-button
@@ -440,71 +469,71 @@ const columns: DataTableColumns<FileMapping> = [
               :focusable="false"
               :loading="sourceTestState.loading"
               @click="onTestSourceMapping"
-            >测试</n-button>
-          </n-space>
+            >探测</n-button>
+          </div>
         </n-form-item>
         <n-form-item
-          label="目标(相对目标目录,例:config/app.ini)"
+          label="目标相对路径 (相对于 Target 部署目录)"
           :feedback="form.targetRelpath.includes('..')
-            ? '不能包含 ..'
+            ? '安全限制: 路径不能包含 ..'
             : (config.targetDir
-              ? (form.targetRelpath ? '' : '空 = 拷到目标根目录,文件名沿用源文件名')
-              : '提示:请先在设置里配置目标目录')"
+              ? (form.targetRelpath ? '' : '留空则默认部署到目标根目录并沿用源文件名')
+              : '提示: 请先在配置页设置目标部署目录')"
           :validation-status="form.targetRelpath.includes('..') ? 'error' : undefined"
         >
-          <n-space :wrap="false">
+          <div class="modal-input-row">
             <n-input
               v-model:value="form.targetRelpath"
               placeholder="config/app.ini"
-              style="width: 360px"
+              class="monospace-text"
+              style="flex: 1"
             />
             <n-button @click="pickTargetFolder" :disabled="!config.targetDir">
-              浏览目标…
+              选择目标子目录…
             </n-button>
-          </n-space>
+          </div>
         </n-form-item>
-        <n-form-item label="覆盖模式">
+        <n-form-item label="写入覆盖策略">
           <n-radio-group
             :value="form.overwrite"
             @update:value="(v: boolean) => (form.overwrite = v)"
           >
-            <n-radio :value="false">仅目标缺失时补回(推荐)</n-radio>
-            <n-radio :value="true">每次强制覆盖目标</n-radio>
+            <n-space size="large">
+              <n-radio :value="false">仅目标缺失时自动补回 (保护本地修改 · 推荐)</n-radio>
+              <n-radio :value="true">每次强制覆盖 (模板强制重置)</n-radio>
+            </n-space>
           </n-radio-group>
-          <template #feedback>
-            <span style="font-size: 12px; color: #6b7785">
-              仅缺失补:用户编辑过的不会被覆盖;强制覆盖:每次都用模板覆盖
-            </span>
-          </template>
         </n-form-item>
-        <n-form-item label="源文件不存在时">
+        <n-form-item label="当源端文件不存在或离线时">
           <n-radio-group
             :value="form.ifSourceMissing"
             @update:value="(v: 'skip' | 'keep' | 'delete') => (form.ifSourceMissing = v)"
           >
-            <n-radio value="skip">跳过(不动目标)</n-radio>
-            <n-radio value="keep">保留(目标不动)</n-radio>
-            <n-radio value="delete">从目标删除</n-radio>
+            <n-space size="large">
+              <n-radio value="skip">跳过并告警 (目标不动)</n-radio>
+              <n-radio value="keep">静默保留 (目标不动)</n-radio>
+              <n-radio value="delete">同步删除目标</n-radio>
+            </n-space>
           </n-radio-group>
         </n-form-item>
-        <n-form-item label="启用">
+        <n-form-item label="规则启用状态">
           <n-switch v-model:value="form.enabled" />
         </n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showModal = false">取消</n-button>
-          <n-button type="primary" :loading="formLoading" @click="onSaveMapping">保存</n-button>
+          <n-button type="primary" :loading="formLoading" @click="onSaveMapping">保存规则</n-button>
         </n-space>
       </template>
     </n-modal>
 
-    <!-- 源文件测试结果 modal -->
+    <!-- 源文件测试结果 Modal -->
     <n-modal
       v-model:show="sourceTestState.show"
       preset="card"
       style="width: 560px; max-width: 90vw"
-      :title="sourceTestState.result?.ok ? '✓ 源文件可达' : '✗ 源文件不可达'"
+      :title="sourceTestState.result?.ok ? '✓ 源文件可正常读取' : '✗ 源文件探测失败'"
       :bordered="false"
       size="huge"
     >
@@ -512,9 +541,9 @@ const columns: DataTableColumns<FileMapping> = [
         <div v-if="!sourceTestState.loading && sourceTestState.result">
           <template v-if="sourceTestState.result.ok">
             <n-space vertical :size="8">
-              <n-text>源文件可访问 · 耗时 {{ sourceTestState.result.durationMs }}ms</n-text>
+              <n-text>源端文件连通性正常 · 探测响应耗时 {{ sourceTestState.result.durationMs }}ms</n-text>
               <n-text depth="3" style="font-size: 12px">
-                单文件映射,无需文件数 / 总大小。
+                单文件映射通道就绪，同步调度器可正常拉取此文件。
               </n-text>
             </n-space>
           </template>
@@ -525,14 +554,12 @@ const columns: DataTableColumns<FileMapping> = [
                 :show-icon="true"
               >
                 <n-space vertical :size="4">
-                  <n-text>
-                    <b>{{ labelOf(sourceTestState.result.fatalReason as any) }}</b>
-                  </n-text>
+                  <n-text><b>{{ labelOf(sourceTestState.result.fatalReason as any) }}</b></n-text>
                   <n-text depth="3" style="font-size: 12px">{{ sourceTestState.result.error }}</n-text>
                 </n-space>
               </n-alert>
               <n-text depth="3" style="font-size: 12px">
-                建议:{{ adviceOf(sourceTestState.result.fatalReason as any) }}
+                运维排查建议: {{ adviceOf(sourceTestState.result.fatalReason as any) }}
               </n-text>
             </n-space>
           </template>
@@ -545,7 +572,7 @@ const columns: DataTableColumns<FileMapping> = [
             v-if="sourceTestState.result && !sourceTestState.result.ok"
             type="primary"
             @click="onTestSourceMapping"
-          >重试</n-button>
+          >重试探测</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -553,59 +580,136 @@ const columns: DataTableColumns<FileMapping> = [
 </template>
 
 <style scoped>
-.page {
+.ops-view-container {
+  height: 100%;
+  padding: 20px 24px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
+}
+
+.ops-panel-card {
+  flex: 1;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.panel-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.header-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.panel-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+}
+
+.panel-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.panel-subtitle {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.panel-body {
   flex: 1;
   min-height: 0;
-  padding: 16px;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-@media (min-width: 768px) {
-  .page {
-    padding: 24px;
-  }
-}
-
-@media (min-width: 1200px) {
-  .page {
-    padding: 32px;
-  }
-}
-
-.hero h1 {
-  margin: 0 0 4px;
-  font-size: 24px;
-}
-
-.subtitle {
-  margin: 0 0 16px;
-  color: #6b7785;
-  font-size: 13px;
-}
-
-.table-wrap {
-  flex: 1 1 0;
-  min-height: 300px;
-  background: #fff;
-  border: 1px solid #e4e7eb;
-  border-radius: 8px;
-  padding: 12px;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
-.toolbar {
+.table-container {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+}
+
+.empty-state-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.empty-svg {
+  width: 48px;
+  height: 48px;
+  color: #cbd5e1;
+  margin-bottom: 12px;
+}
+
+.empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 6px;
+}
+
+.empty-desc {
+  font-size: 12px;
+  color: #64748b;
+  max-width: 460px;
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+
+.panel-footer {
+  padding: 12px 20px;
+  border-top: 1px solid #f1f5f9;
+  background: #f8fafc;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  font-size: 12px;
+  color: #64748b;
+  flex-shrink: 0;
 }
 
-.hint {
-  font-size: 13px;
-  color: #6b7785;
+.footer-tip {
+  color: #64748b;
+}
+
+.modal-input-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.monospace-text {
+  font-family: "SFMono-Regular", Consolas, monospace;
 }
 </style>

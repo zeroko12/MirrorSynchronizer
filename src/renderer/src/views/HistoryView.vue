@@ -15,7 +15,6 @@ import {
   NTag,
   NSpace,
   NButton,
-  NEmpty,
   NModal,
   type DataTableColumns,
 } from 'naive-ui';
@@ -156,123 +155,292 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page">
-    <header class="hero">
-      <h1>同步历史</h1>
-      <p class="subtitle">
-        共 {{ total }} 条记录 · 每页 {{ pageSize }} 条 · {{ lastLoadLog || '加载中...' }}
-      </p>
-    </header>
+  <div class="ops-view-container">
+    <div class="ops-panel-card">
+      <!-- 运维面板头部 -->
+      <div class="panel-header">
+        <div class="header-left">
+          <div class="header-title-row">
+            <span class="panel-tag">AUDIT LOG STREAM</span>
+            <span class="panel-title">同步事务与审计日志</span>
+          </div>
+          <span class="panel-subtitle">
+            累计归档 {{ total }} 次同步流水记录 · 记录每次增量下载、内容修改、文件删除与异常调用栈
+          </span>
+        </div>
 
-    <n-alert
-      v-if="loadError"
-      type="error"
-      closable
-      style="margin-bottom: 16px"
-      title="加载失败"
-    >
-      {{ loadError }}
-    </n-alert>
+        <div class="header-actions">
+          <n-button size="medium" @click="load">刷新日志</n-button>
+        </div>
+      </div>
 
-    <div class="table-wrap">
-      <n-empty
-        v-if="!loading && items.length === 0"
-        description="还没有同步记录"
-        style="margin-top: 60px"
-      />
-      <n-data-table
-        v-else
-        :columns="columns"
-        :data="items"
-        :loading="loading"
-        :row-key="(r: HistoryItem) => r.id"
-        :pagination="false"
-        size="small"
-        :bordered="false"
-        table-layout="fixed"
-        flex-height
-        style="width: 100%; min-width: 0; height: 100%"
-      />
+      <!-- 告警信息 -->
+      <div v-if="loadError" class="panel-alerts-area">
+        <n-alert type="error" closable title="审计记录检索失败">
+          {{ loadError }}
+        </n-alert>
+      </div>
+
+      <!-- 面板主体表格 -->
+      <div class="panel-body">
+        <div v-if="!loading && items.length === 0" class="empty-state-box">
+          <svg class="empty-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <polyline points="4 17 10 11 4 5" />
+            <line x1="12" y1="19" x2="20" y2="19" />
+          </svg>
+          <span class="empty-title">暂无审计流水记录</span>
+          <span class="empty-desc">
+            当首次自动或手动同步触发时，完整的执行耗时、变更文件数与事务明细将实时记录在此。
+          </span>
+        </div>
+
+        <div v-else class="table-container">
+          <n-data-table
+            :columns="columns"
+            :data="items"
+            :loading="loading"
+            :row-key="(r: HistoryItem) => r.id"
+            :pagination="false"
+            size="small"
+            :bordered="false"
+            table-layout="fixed"
+            flex-height
+            style="width: 100%; min-width: 0; height: 100%"
+          />
+        </div>
+      </div>
+
+      <!-- 面板底部工具栏与分页 -->
+      <div class="panel-footer">
+        <span class="footer-tip">
+          状态指示: 增(+) 下载新文件 · 改(~) 覆写已变文件 · 删(−) 清除孤儿文件
+        </span>
+
+        <div class="pager" v-if="totalPages > 1">
+          <n-button size="small" :disabled="page <= 1" @click="page--; load()">上一页</n-button>
+          <span class="pager-text">{{ page }} / {{ totalPages }} 页</span>
+          <n-button size="small" :disabled="page >= totalPages" @click="page++; load()">下一页</n-button>
+        </div>
+      </div>
     </div>
 
-    <div class="pager" v-if="totalPages > 1">
-      <n-button :disabled="page <= 1" @click="page--; load()">上一页</n-button>
-      <span>第 {{ page }} / {{ totalPages }} 页</span>
-      <n-button :disabled="page >= totalPages" @click="page++; load()">下一页</n-button>
-      <n-button text type="primary" @click="load" style="margin-left: auto">刷新</n-button>
-    </div>
-
-    <n-modal v-model:show="detailsVisible" preset="card" title="同步详情" style="max-width: 600px">
-      <div v-if="detailsItem" class="details">
-        <p><b>时间:</b> {{ formatTime(detailsItem.startedAt) }}</p>
-        <p><b>耗时:</b> {{ detailsItem.durationMs }}ms</p>
-        <p>
-          <b>变化:</b>
-          <n-tag v-if="detailsItem.addedCount > 0" type="info" size="small">+{{ detailsItem.addedCount }} 新增</n-tag>
-          <n-tag v-if="detailsItem.modifiedCount > 0" type="warning" size="small">~{{ detailsItem.modifiedCount }} 修改</n-tag>
-          <n-tag v-if="detailsItem.deletedCount > 0" type="error" size="small">−{{ detailsItem.deletedCount }} 删除</n-tag>
-        </p>
-        <p><b>未变:</b> {{ detailsItem.unchangedCount }}</p>
-        <p v-if="detailsItem.fatalError" style="color: #a02d3a"><b>错误:</b> {{ detailsItem.fatalError }}</p>
-        <p style="word-break: break-all; font-size: 12px; color: #666"><b>源:</b> {{ detailsItem.sourceDir }}</p>
-        <p style="word-break: break-all; font-size: 12px; color: #666"><b>目标:</b> {{ detailsItem.targetDir }}</p>
+    <!-- 事务详情 Modal -->
+    <n-modal v-model:show="detailsVisible" preset="card" title="同步事务详情" style="max-width: 620px">
+      <div v-if="detailsItem" class="details-grid">
+        <div class="detail-row">
+          <span class="detail-key">执行时刻:</span>
+          <span class="detail-val monospace-text">{{ formatTime(detailsItem.startedAt) }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-key">总耗时:</span>
+          <span class="detail-val monospace-text">{{ detailsItem.durationMs }}ms</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-key">变更统计:</span>
+          <div class="detail-val change-tags">
+            <n-tag v-if="detailsItem.addedCount > 0" type="info" size="small">+{{ detailsItem.addedCount }} 新增</n-tag>
+            <n-tag v-if="detailsItem.modifiedCount > 0" type="warning" size="small">~{{ detailsItem.modifiedCount }} 修改</n-tag>
+            <n-tag v-if="detailsItem.deletedCount > 0" type="error" size="small">−{{ detailsItem.deletedCount }} 删除</n-tag>
+            <n-tag type="default" size="small">{{ detailsItem.unchangedCount }} 相同未变</n-tag>
+          </div>
+        </div>
+        <div class="detail-row" v-if="detailsItem.fatalError">
+          <span class="detail-key">致命异常:</span>
+          <span class="detail-val error-text">{{ detailsItem.fatalError }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-key">源节点路径:</span>
+          <span class="detail-val monospace-text path-text">{{ detailsItem.sourceDir }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-key">目标部署路径:</span>
+          <span class="detail-val monospace-text path-text">{{ detailsItem.targetDir }}</span>
+        </div>
       </div>
     </n-modal>
   </div>
 </template>
 
 <style scoped>
-.page {
+.ops-view-container {
+  height: 100%;
+  padding: 20px 24px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
+}
+
+.ops-panel-card {
+  flex: 1;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.panel-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.header-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.panel-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+}
+
+.panel-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.panel-subtitle {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.panel-alerts-area {
+  padding: 12px 20px 0;
+}
+
+.panel-body {
   flex: 1;
   min-height: 0;
-  padding: 16px;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-@media (min-width: 768px) {
-  .page {
-    padding: 24px;
-  }
-}
-
-@media (min-width: 1200px) {
-  .page {
-    padding: 32px;
-  }
-}
-
-.hero h1 {
-  margin: 0 0 4px;
-  font-size: 24px;
-}
-
-.subtitle {
-  margin: 0 0 16px;
-  color: #6b7785;
-  font-size: 13px;
-}
-
-/* 显式高度 wrapper,避免复杂 flex 链条 */
-.table-wrap {
-  flex: 1 1 0;
-  min-height: 300px;
-  background: #fff;
-  border: 1px solid #e4e7eb;
-  border-radius: 8px;
-  padding: 12px;
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+.table-container {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+}
+
+.empty-state-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.empty-svg {
+  width: 48px;
+  height: 48px;
+  color: #cbd5e1;
+  margin-bottom: 12px;
+}
+
+.empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 6px;
+}
+
+.empty-desc {
+  font-size: 12px;
+  color: #64748b;
+  max-width: 460px;
+  line-height: 1.6;
+}
+
+.panel-footer {
+  padding: 12px 20px;
+  border-top: 1px solid #f1f5f9;
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.footer-tip {
+  color: #64748b;
 }
 
 .pager {
   display: flex;
   align-items: center;
+  gap: 10px;
+}
+
+.pager-text {
+  font-family: monospace;
+  font-size: 12px;
+  color: #475569;
+}
+
+.details-grid {
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  margin-top: 16px;
   font-size: 13px;
-  color: #6b7785;
+}
+
+.detail-row {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.detail-key {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.detail-val {
+  color: #0f172a;
+}
+
+.monospace-text {
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.path-text {
+  word-break: break-all;
+  font-size: 12px;
+  color: #334155;
+}
+
+.change-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.error-text {
+  color: #ef4444;
+  font-weight: 600;
 }
 </style>

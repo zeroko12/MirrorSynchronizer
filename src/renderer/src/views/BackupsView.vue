@@ -11,10 +11,8 @@ import {
   NDataTable,
   NInputNumber,
   NTag,
-  NText,
   NSpace,
   NButton,
-  NEmpty,
   NPopconfirm,
   NAlert,
   useMessage,
@@ -204,141 +202,254 @@ async function load() {
 </script>
 
 <template>
-  <div class="page">
-    <header class="hero">
-      <h1>版本快照与还原</h1>
-      <p class="subtitle">
-        共 {{ items.length }} 个备份 · 每次更新前自动创建还原点 · 支持一键秒级回退 · {{ lastLoadLog || '加载中...' }}
-      </p>
-    </header>
+  <div class="ops-view-container">
+    <div class="ops-panel-card">
+      <!-- 运维面板头部 -->
+      <div class="panel-header">
+        <div class="header-left">
+          <div class="header-title-row">
+            <span class="panel-tag">SNAPSHOT ENGINE</span>
+            <span class="panel-title">历史快照归档与秒级回退</span>
+          </div>
+          <span class="panel-subtitle">
+            共归档 {{ items.length }} 个版本快照 · 发生意外或异常部署时可一键回退到指定时间点
+          </span>
+        </div>
 
-    <n-space align="center" :wrap="true" style="margin-bottom: 16px">
-      <n-text depth="3" style="font-size: 13px; white-space: nowrap">保留备份数:</n-text>
-      <n-input-number
-        :value="config.backupCount"
-        :min="1"
-        :max="20"
-        :step="1"
-        size="small"
-        :loading="backupCountSaving"
-        style="width: 110px"
-        @update:value="onChangeBackupCount"
-      />
-      <n-text depth="3" style="font-size: 12px">(修改后下次同步生效)</n-text>
-    </n-space>
+        <div class="header-actions">
+          <div class="quota-control">
+            <span class="quota-label">保留快照配额:</span>
+            <n-input-number
+              :value="config.backupCount"
+              :min="1"
+              :max="50"
+              :step="1"
+              size="small"
+              :loading="backupCountSaving"
+              style="width: 100px"
+              @update:value="onChangeBackupCount"
+            />
+          </div>
+          <n-button size="medium" @click="load">刷新列表</n-button>
+        </div>
+      </div>
 
-    <n-alert
-      v-if="loadError"
-      type="error"
-      closable
-      style="margin-bottom: 16px"
-      title="加载失败"
-    >
-      {{ loadError }}
-    </n-alert>
+      <!-- 操作与告警反馈 -->
+      <div v-if="loadError || lastActionError || (lastSuccessAt && !lastActionError)" class="panel-alerts-area">
+        <n-alert
+          v-if="loadError"
+          type="error"
+          closable
+          title="快照目录加载失败"
+        >
+          {{ loadError }}
+        </n-alert>
+        <n-alert
+          v-if="lastActionError"
+          type="error"
+          closable
+          title="回滚/删除操作异常"
+        >
+          <pre style="white-space: pre-wrap; margin: 0; font-size: 12px">{{ lastActionError }}</pre>
+        </n-alert>
+        <n-alert
+          v-if="lastSuccessAt && !lastActionError"
+          type="success"
+          closable
+        >
+          ✓ 回退/归档事务执行完毕 · {{ formatTime(lastSuccessAt) }}
+        </n-alert>
+      </div>
 
-    <n-alert
-      v-if="lastActionError"
-      type="error"
-      closable
-      style="margin-bottom: 16px"
-      title="操作失败"
-    >
-      <pre style="white-space: pre-wrap; margin: 0; font-size: 12px">{{ lastActionError }}</pre>
-    </n-alert>
+      <!-- 面板主体表格 -->
+      <div class="panel-body">
+        <div v-if="!loading && items.length === 0" class="empty-state-box">
+          <svg class="empty-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <polyline points="21 8 21 21 3 21 3 8" />
+            <rect x="1" y="3" width="22" height="5" />
+            <line x1="10" y1="12" x2="14" y2="12" />
+          </svg>
+          <span class="empty-title">暂无归档的快照版本</span>
+          <span class="empty-desc">
+            当同步引擎首次检测到源端变动并准备覆盖本地文件前，系统将自动创建目标目录的全量快照归档并在此列出。
+          </span>
+        </div>
 
-    <n-alert
-      v-if="lastSuccessAt && !lastActionError"
-      type="success"
-      style="margin-bottom: 16px"
-      closable
-    >
-      ✓ 操作成功 · {{ formatTime(lastSuccessAt) }}
-    </n-alert>
+        <div v-else class="table-container">
+          <n-data-table
+            :columns="columns"
+            :data="items"
+            :loading="loading"
+            :row-key="(r: BackupItem) => r.id"
+            :pagination="false"
+            size="small"
+            :bordered="false"
+            table-layout="fixed"
+            flex-height
+            style="width: 100%; min-width: 0; height: 100%"
+          />
+        </div>
+      </div>
 
-    <div class="table-wrap">
-      <n-empty
-        v-if="!loading && items.length === 0"
-        description="还没有备份"
-        style="margin-top: 60px"
-      />
-      <n-data-table
-        v-else
-        :columns="columns"
-        :data="items"
-        :loading="loading"
-        :row-key="(r: BackupItem) => r.id"
-        :pagination="false"
-        size="small"
-        :bordered="false"
-        table-layout="fixed"
-        flex-height
-        style="width: 100%; min-width: 0; height: 100%"
-      />
-    </div>
-
-    <div class="footer-bar">
-      <n-button @click="load" size="small">刷新</n-button>
-      <span class="hint">"回退" 会先把 target 当前内容做一份安全快照,再覆盖。任意时刻可以二次回退。</span>
+      <!-- 面板底部状态栏 -->
+      <div class="panel-footer">
+        <span class="footer-tip">
+          🛡️ 安全防护: 执行"回退"前，系统会自动对目标当前目录生成一份新的安全保护快照。任何回滚操作均 100% 可逆。
+        </span>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.page {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  padding: 16px;
-  width: 100%;
+.ops-view-container {
+  height: 100%;
+  padding: 20px 24px;
   box-sizing: border-box;
-}
-
-@media (min-width: 768px) {
-  .page {
-    padding: 24px;
-  }
-}
-
-@media (min-width: 1200px) {
-  .page {
-    padding: 32px;
-  }
-}
-
-.hero h1 {
-  margin: 0 0 4px;
-  font-size: 24px;
-}
-
-.subtitle {
-  margin: 0 0 16px;
-  color: #6b7785;
-  font-size: 13px;
-}
-
-.table-wrap {
-  flex: 1 1 0;
-  min-height: 300px;
-  background: #fff;
-  border: 1px solid #e4e7eb;
-  border-radius: 8px;
-  padding: 12px;
   display: flex;
   flex-direction: column;
 }
 
-.footer-bar {
+.ops-panel-card {
+  flex: 1;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.panel-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.header-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.panel-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+}
+
+.panel-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.panel-subtitle {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.header-actions {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-top: 16px;
-  font-size: 12px;
-  color: #6b7785;
 }
 
-.hint {
-  margin-left: 8px;
+.quota-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #f8fafc;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+}
+
+.quota-label {
+  font-size: 12px;
+  color: #475569;
+  font-weight: 500;
+}
+
+.panel-alerts-area {
+  padding: 12px 20px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.table-container {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+}
+
+.empty-state-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.empty-svg {
+  width: 48px;
+  height: 48px;
+  color: #cbd5e1;
+  margin-bottom: 12px;
+}
+
+.empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 6px;
+}
+
+.empty-desc {
+  font-size: 12px;
+  color: #64748b;
+  max-width: 460px;
+  line-height: 1.6;
+}
+
+.panel-footer {
+  padding: 12px 20px;
+  border-top: 1px solid #f1f5f9;
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.footer-tip {
+  color: #64748b;
 }
 </style>
