@@ -35,6 +35,8 @@ const DEFAULT_CONFIG: AppConfig = {
     passwordHash: '',        // 首次启动时生成
     autoDiscover: true,      // 默认开 mDNS
   },
+  sourceAuth: undefined,
+  sourceAuthSecretEnv: undefined,
 };
 
 export class ConfigManager {
@@ -107,11 +109,38 @@ export class ConfigManager {
       remote: partial.remote
         ? { ...this.defaults.remote!, ...partial.remote }
         : { ...this.defaults.remote! },
+      sourceAuth: partial.sourceAuth ? { ...partial.sourceAuth } : undefined,
+      sourceAuthSecretEnv: partial.sourceAuthSecretEnv ?? undefined,
     };
   }
 
   private validate(config: AppConfig): AppConfig {
     const errors: string[] = [];
+    if (config.sourceAuth) {
+      const url = (config.sourceDir || '').toLowerCase();
+      if (url && !/^(https?|webdav):\/\//.test(url)) {
+        errors.push('sourceAuth 仅当 sourceDir 是 http(s):// 或 webdav:// 时有效');
+      }
+      switch (config.sourceAuth.kind) {
+        case 'basic':
+          if (!config.sourceAuth.username || !config.sourceAuth.username.trim()) {
+            errors.push('sourceAuth (basic) 的 username 不能为空');
+          }
+          break;
+        case 'cf-access':
+          if (!config.sourceAuth.clientId || !config.sourceAuth.clientId.trim()) {
+            errors.push('sourceAuth (cf-access) 的 clientId 不能为空');
+          }
+          break;
+        default:
+          errors.push(`未知 sourceAuth.kind: ${(config.sourceAuth as any)?.kind}`);
+      }
+    }
+    if (config.sourceAuthSecretEnv !== undefined) {
+      if (typeof config.sourceAuthSecretEnv !== 'string' || !config.sourceAuthSecretEnv.trim()) {
+        errors.push('sourceAuthSecretEnv 必须是非空字符串');
+      }
+    }
     if (config.intervalSec < MIN_INTERVAL_SEC) errors.push(`intervalSec < ${MIN_INTERVAL_SEC}`);
     if (config.intervalSec > MAX_INTERVAL_SEC) errors.push(`intervalSec > ${MAX_INTERVAL_SEC} (7 days)`);
     if (config.backupCount < MIN_BACKUP_COUNT) errors.push(`backupCount < ${MIN_BACKUP_COUNT}`);

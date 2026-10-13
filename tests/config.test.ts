@@ -128,3 +128,73 @@ describe('deriveDefaultBackupDir', () => {
     expect(deriveDefaultBackupDir('D:/app')).toBe('D:/app-backups');
   });
 });
+
+describe('ConfigManager - sourceAuth 配置与校验', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await makeTempDir('cfg-auth-');
+  });
+
+  afterEach(async () => {
+    await rmTemp(dir);
+  });
+
+  it('有效 Basic Auth 配置可成功保存并读回', async () => {
+    const path = join(dir, 'cfg.json');
+    const mgr = new ConfigManager({ configPath: path, defaults: DEFAULT_CONFIG });
+    await mgr.save({
+      ...DEFAULT_CONFIG,
+      sourceDir: 'https://updates.example.com/',
+      sourceAuth: { kind: 'basic', username: 'deploy', password: 'secretpassword' },
+      sourceAuthSecretEnv: 'DEPLOY_PASS',
+    });
+    const loaded = await mgr.load();
+    expect(loaded.sourceAuth).toEqual({
+      kind: 'basic',
+      username: 'deploy',
+      password: 'secretpassword',
+    });
+    expect(loaded.sourceAuthSecretEnv).toBe('DEPLOY_PASS');
+  });
+
+  it('有效 Cloudflare Access Service Token 配置可成功保存并读回', async () => {
+    const path = join(dir, 'cfg.json');
+    const mgr = new ConfigManager({ configPath: path, defaults: DEFAULT_CONFIG });
+    await mgr.save({
+      ...DEFAULT_CONFIG,
+      sourceDir: 'https://updates.example.com/',
+      sourceAuth: { kind: 'cf-access', clientId: 'cf-id-123', clientSecret: 'cf-secret-456' },
+    });
+    const loaded = await mgr.load();
+    expect(loaded.sourceAuth).toEqual({
+      kind: 'cf-access',
+      clientId: 'cf-id-123',
+      clientSecret: 'cf-secret-456',
+    });
+  });
+
+  it('Basic Auth 用户名为空时校验失败抛错', async () => {
+    const path = join(dir, 'cfg.json');
+    const mgr = new ConfigManager({ configPath: path, defaults: DEFAULT_CONFIG });
+    await expect(
+      mgr.save({
+        ...DEFAULT_CONFIG,
+        sourceDir: 'https://updates.example.com/',
+        sourceAuth: { kind: 'basic', username: '' },
+      }),
+    ).rejects.toThrow(/username 不能为空/);
+  });
+
+  it('Cloudflare Access Client ID 为空时校验失败抛错', async () => {
+    const path = join(dir, 'cfg.json');
+    const mgr = new ConfigManager({ configPath: path, defaults: DEFAULT_CONFIG });
+    await expect(
+      mgr.save({
+        ...DEFAULT_CONFIG,
+        sourceDir: 'https://updates.example.com/',
+        sourceAuth: { kind: 'cf-access', clientId: '' },
+      }),
+    ).rejects.toThrow(/clientId 不能为空/);
+  });
+});

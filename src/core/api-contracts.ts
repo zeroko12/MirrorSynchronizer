@@ -11,7 +11,8 @@
  */
 
 import type { PathErrorKind } from './errors.js';
-import type { AppConfig, FileMapping, SyncResult } from './types.js';
+import type { AppConfig, FileMapping, SyncResult, SourceAuth } from './types.js';
+export type { SourceAuth };
 
 /* ============================ 文件夹 / 路径选择 ============================ */
 

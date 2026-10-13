@@ -5,7 +5,7 @@
  * 这样改 api 对象 → 渲染端类型自动跟随,不会漂移
  */
 
-import type { AppConfig } from '@core/types';
+import type { AppConfig, SourceAuth } from '@core/types';
 import type {
   AppStateInfo,
   AutostartResult,
@@ -30,6 +30,7 @@ import type {
 } from '@core/api-contracts';
 
 // 重新导出,供视图组件直接 import(避免每处都 import 跨模块)
+export type { SourceAuth };
 export type {
   AppStateInfo,
   AutostartResult,
@@ -93,7 +94,7 @@ declare global {
       autostartSet: (enabled: boolean) => Promise<AutostartResult>;
       mappingsApplyAll: () => Promise<MappingsApplyResult>;
       mappingsTestOne: (id: string) => Promise<MappingsApplyResult>;
-      sourceTest: (source: string) => Promise<SourceTestResult>;
+      sourceTest: (source: string, auth?: SourceAuth, secretEnv?: string) => Promise<SourceTestResult>;
       getRemoteInfo: () => Promise<RemoteAccessInfo | null>;
       setRemoteEnabled: (enabled: boolean) => Promise<{ ok: boolean; error?: string; info?: RemoteAccessInfo | null }>;
       resetRemotePassword: () => Promise<{ ok: boolean; error?: string; newPassword?: string; info?: RemoteAccessInfo | null }>;

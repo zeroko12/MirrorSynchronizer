@@ -21,6 +21,7 @@ import type {
   SelectFolderResult,
   SelectPathResult,
   SourceTestResult,
+  SourceAuth,
   StateSetPopupEnabledResult,
   StatusInfo,
   UpdatePromptPayload,
@@ -117,7 +118,7 @@ const api = {
   mappingsTestOne: (id: string): Promise<MappingsApplyResult> => ipcRenderer.invoke('mappings:testOne', id),
 
   // 源测试(只读,不改 config)
-  sourceTest: (source: string): Promise<SourceTestResult> => ipcRenderer.invoke('source:test', source),
+  sourceTest: (source: string, auth?: SourceAuth, secretEnv?: string): Promise<SourceTestResult> => ipcRenderer.invoke('source:test', source, auth, secretEnv),
 
   // 远程访问信息
   getRemoteInfo: (): Promise<RemoteAccessInfo | null> => ipcRenderer.invoke('remote:getInfo'),

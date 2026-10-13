@@ -37,6 +37,38 @@ afterAll(async () => {
 
 function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const url = req.url ?? '/';
+  if (req.method === 'PROPFIND' && url === '/webdav-auth/') {
+    const expected = 'Basic ' + Buffer.from('davuser:davpass').toString('base64');
+    if (req.headers['authorization'] !== expected) {
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="WebDAV"' });
+      res.end('Unauthorized');
+      return;
+    }
+    res.writeHead(207, { 'content-type': 'application/xml; charset=utf-8' });
+    res.end(`<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>${baseUrl}/webdav-auth/</D:href>
+    <D:propstat>
+      <D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>${baseUrl}/webdav-auth/secure.txt</D:href>
+    <D:propstat>
+      <D:prop>
+        <D:resourcetype/>
+        <D:getcontentlength>20</D:getcontentlength>
+        <D:getlastmodified>Mon, 17 Jun 2026 12:00:00 GMT</D:getlastmodified>
+      </D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+</D:multistatus>`);
+    return;
+  }
+
   if (req.method === 'PROPFIND' && url === '/webdav/') {
     // 模拟 multistatus 响应
     res.writeHead(207, { 'content-type': 'application/xml; charset=utf-8' });
@@ -254,5 +286,25 @@ describe('WebDAVAdapter', () => {
     // 不真发请求,只验证构造
     const a = new WebDAVAdapter('webdav://user:pass@example.com/webdav/');
     expect((a as unknown as { baseUrl: URL }).baseUrl.protocol).toBe('https:');
+  });
+});
+
+describe('WebDAVAdapter - 认证支持', () => {
+  it('带 Basic Auth 凭据成功通过 PROPFIND 扫描受保护目录', async () => {
+    const a = new WebDAVAdapter(`${baseUrl}/webdav-auth/`, {
+      kind: 'basic',
+      username: 'davuser',
+      password: 'davpass',
+    });
+    const entries = await a.scan();
+    expect(entries.length).toBe(1);
+    expect(entries[0].relPath).toBe('secure.txt');
+    await a.close();
+  });
+
+  it('无认证访问受保护 WebDAV 服务抛错 (401)', async () => {
+    const a = new WebDAVAdapter(`${baseUrl}/webdav-auth/`);
+    await expect(a.scan()).rejects.toThrow(/HTTP 401/);
+    await a.close();
   });
 });

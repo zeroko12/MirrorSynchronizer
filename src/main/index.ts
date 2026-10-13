@@ -27,7 +27,8 @@ import { mainLog } from '../core/logger.js';
 import { SOURCE_TEST_SAMPLE_SIZE, SOURCE_TEST_TIMEOUT_MS } from '../core/constants.js';
 import { pickAdapter, type SourceAdapter } from '../core/adapter.js';
 import { classifyFetchError, classifyHttpStatus, type PathErrorKind } from '../core/errors.js';
-import type { AppConfig, SyncResult } from '../core/types.js';
+import type { AppConfig, SyncResult, SourceAuth } from '../core/types.js';
+import { resolveEffectiveAuth } from '../core/auth.js';
 import { getConfigPath, getHistoryDbPath, getIndexCachePath, getStatePath } from './services/paths.js';
 import { createWindow, getMainWindow } from './services/window.js';
 import { createTray } from './services/tray.js';
@@ -664,7 +665,7 @@ function registerIpc(): void {
     await shell.openExternal(url);
   });
 
-  ipcMain.handle('source:test', async (_e, source: string) => {
+  ipcMain.handle('source:test', async (_e, source: string, auth?: SourceAuth, secretEnv?: string) => {
     const startedAt = Date.now();
     if (!source || !source.trim()) {
       return { ok: false, error: '源路径为空', fatalReason: 'not-found', durationMs: 0 };
@@ -673,7 +674,8 @@ function registerIpc(): void {
 
     let adapter: SourceAdapter;
     try {
-      adapter = pickAdapter(trimmed);
+      const effectiveAuth = resolveEffectiveAuth(auth, secretEnv);
+      adapter = pickAdapter(trimmed, { auth: effectiveAuth });
     } catch (err) {
       return {
         ok: false,

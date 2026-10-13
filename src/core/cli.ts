@@ -38,6 +38,11 @@ interface CliArgs {
   ignoreItems: string[];
   applyMode?: 'immediate' | 'staging' | 'immediate-with-precheck';
   stagingDir?: string;
+  sourceAuthKind?: 'basic' | 'cf-access';
+  sourceAuthUser?: string;
+  sourceAuthClientId?: string;
+  sourceAuthSecret?: string;
+  sourceAuthSecretEnv?: string;
   quiet: boolean;
 }
 
@@ -77,6 +82,18 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       }
       case '--staging-dir': out.stagingDir = argv[++i]; break;
+      case '--source-auth-kind': {
+        const v = argv[++i];
+        if (v !== 'basic' && v !== 'cf-access') {
+          throw new Error(`--source-auth-kind 必须是 basic 或 cf-access,当前: ${v}`);
+        }
+        out.sourceAuthKind = v;
+        break;
+      }
+      case '--source-auth-user': out.sourceAuthUser = argv[++i]; break;
+      case '--source-auth-client-id': out.sourceAuthClientId = argv[++i]; break;
+      case '--source-auth-secret': out.sourceAuthSecret = argv[++i]; break;
+      case '--source-auth-secret-env': out.sourceAuthSecretEnv = argv[++i]; break;
       case '--interval': {
         const v = Number(argv[++i]);
         if (Number.isNaN(v) || v < MIN_INTERVAL_SEC) {
@@ -115,6 +132,11 @@ function printHelp(): void {
   --ignore-dir <dir>      追加忽略目录(可多次,相对 target 根)
   --apply-mode <mode>     覆盖应用模式 (immediate|staging)
   --staging-dir <dir>     覆盖 staging 目录(staging 模式生效)
+  --source-auth-kind <k>  指定远程认证类型 (basic|cf-access)
+  --source-auth-user <u>  指定 Basic Auth 用户名
+  --source-auth-client-id 指定 Cloudflare Access Client ID
+  --source-auth-secret <s>指定认证密码或 Client Secret
+  --source-auth-secret-env指定读取密钥的环境变量名 (推荐)
   --interval <sec>        覆盖检查间隔(秒, >= 60)
   --quiet                 减少日志
   -h, --help              显示帮助
@@ -232,16 +254,32 @@ async function runWatch(args: CliArgs): Promise<void> {
 }
 
 function applyCliOverrides(cfg: AppConfig, args: CliArgs): AppConfig {
+  let sourceAuth = cfg.sourceAuth ? { ...cfg.sourceAuth } : undefined;
+  if (args.sourceAuthKind === 'basic') {
+    sourceAuth = {
+      kind: 'basic',
+      username: args.sourceAuthUser ?? (sourceAuth?.kind === 'basic' ? sourceAuth.username : ''),
+      password: args.sourceAuthSecret ?? (sourceAuth?.kind === 'basic' ? sourceAuth.password : undefined),
+    };
+  } else if (args.sourceAuthKind === 'cf-access') {
+    sourceAuth = {
+      kind: 'cf-access',
+      clientId: args.sourceAuthClientId ?? (sourceAuth?.kind === 'cf-access' ? sourceAuth.clientId : ''),
+      clientSecret: args.sourceAuthSecret ?? (sourceAuth?.kind === 'cf-access' ? sourceAuth.clientSecret : undefined),
+    };
+  }
+
   return {
     ...cfg,
     sourceDir: args.source ?? cfg.sourceDir,
     targetDir: args.target ?? cfg.targetDir,
     backupDir: args.backupDir ?? cfg.backupDir,
     intervalSec: args.interval ?? cfg.intervalSec,
-    // CLI 传入的 ignore-dir 追加到 config 列表后面(不去重,让 syncer 内部 buildIgnoreItems 去重)
     ignoreItems: [...(cfg.ignoreItems ?? []), ...args.ignoreItems],
     applyMode: args.applyMode ?? cfg.applyMode,
     stagingDir: args.stagingDir ?? cfg.stagingDir,
+    sourceAuth,
+    sourceAuthSecretEnv: args.sourceAuthSecretEnv ?? cfg.sourceAuthSecretEnv,
   };
 }
 

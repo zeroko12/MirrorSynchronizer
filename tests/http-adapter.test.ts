@@ -28,6 +28,33 @@ afterAll(async () => {
 function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const url = req.url ?? '/';
 
+  // 受到 Basic Auth 保护的端点
+  if (url === '/protected-basic/.manifest.json') {
+    const expected = 'Basic ' + Buffer.from('user:pass123').toString('base64');
+    if (req.headers['authorization'] !== expected) {
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Test"' });
+      res.end('Unauthorized');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([{ relPath: 'secret.txt', size: 10, mtimeMs: 1700000000000 }]));
+    return;
+  }
+
+  // 受到 Cloudflare Access 保护的端点
+  if (url === '/protected-cf/.manifest.json') {
+    const id = req.headers['cf-access-client-id'];
+    const secret = req.headers['cf-access-client-secret'];
+    if (id !== 'my-client-id' || secret !== 'my-client-secret') {
+      res.writeHead(403, { 'content-type': 'text/plain' });
+      res.end('Forbidden');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([{ relPath: 'cf-doc.pdf', size: 2048, mtimeMs: 1700000000000 }]));
+    return;
+  }
+
   // manifest 端点
   if (url === '/files/.manifest.json') {
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -185,6 +212,45 @@ describe('HttpAdapter - manifest cache', () => {
     // 改 server 让第二次必然不一致 — 但如果走 cache,数据应不变
     const r2 = await a.scan();
     expect(r2).toEqual(r1);
+    await a.close();
+  });
+});
+
+describe('HttpAdapter - 认证支持 (Basic Auth & Cloudflare Access)', () => {
+  it('带 Basic Auth 凭据成功访问受保护源', async () => {
+    const a = new HttpAdapter(`${baseUrl}/protected-basic/`, {
+      kind: 'basic',
+      username: 'user',
+      password: 'pass123',
+    });
+    const entries = await a.scan();
+    expect(entries.length).toBe(1);
+    expect(entries[0].relPath).toBe('secret.txt');
+    await a.close();
+  });
+
+  it('无凭据访问受 Basic Auth 保护的源失败 (401)', async () => {
+    const a = new HttpAdapter(`${baseUrl}/protected-basic/`);
+    // scan 在 manifest 401 后会尝试 autoindex,autoindex 也 401 抛错
+    await expect(a.scan()).rejects.toThrow();
+    await a.close();
+  });
+
+  it('带 Cloudflare Access Service Token 成功访问受保护源', async () => {
+    const a = new HttpAdapter(`${baseUrl}/protected-cf/`, {
+      kind: 'cf-access',
+      clientId: 'my-client-id',
+      clientSecret: 'my-client-secret',
+    });
+    const entries = await a.scan();
+    expect(entries.length).toBe(1);
+    expect(entries[0].relPath).toBe('cf-doc.pdf');
+    await a.close();
+  });
+
+  it('无 Cloudflare Access 凭据访问受保护源失败 (403)', async () => {
+    const a = new HttpAdapter(`${baseUrl}/protected-cf/`);
+    await expect(a.scan()).rejects.toThrow();
     await a.close();
   });
 });

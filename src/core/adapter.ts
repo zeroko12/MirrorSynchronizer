@@ -16,7 +16,7 @@ import { createReadStream, promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { Indexer } from './indexer.js';
-import type { FileEntry } from './types.js';
+import type { FileEntry, SourceAuth } from './types.js';
 import type { SourceAdapterKind } from './api-contracts.js';
 import { HttpAdapter } from './http-adapter.js';
 import { WebDAVAdapter } from './webdav-adapter.js';
@@ -71,12 +71,15 @@ export interface OpenConditionalResult {
  * - `http://` 或 `https://` → HttpAdapter(走 manifest/autoindex 兜底)
  * - 其他(本地/SMB/UNC/挂载盘符) → FsAdapter
  */
-export function pickAdapter(source: string): SourceAdapter {
+export function pickAdapter(
+  source: string,
+  options?: { auth?: SourceAuth }
+): SourceAdapter {
   if (/^webdav:\/\//i.test(source)) {
-    return new WebDAVAdapter(source);
+    return new WebDAVAdapter(source, options?.auth);
   }
   if (/^https?:\/\//i.test(source)) {
-    return new HttpAdapter(source);
+    return new HttpAdapter(source, options?.auth);
   }
   return new FsAdapter(source);
 }

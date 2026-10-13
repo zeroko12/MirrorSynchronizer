@@ -33,6 +33,7 @@ import {
   type PathErrorKind,
 } from './errors.js';
 import { pickAdapter, streamToFile, isRemotePath, type SourceAdapter } from './adapter.js';
+import { resolveEffectiveAuth, buildAuthHeaders } from './auth.js';
 import { safeParseContentLength } from './http-adapter.js';
 import { MTIME_JITTER_TOLERANCE_MS } from './constants.js';
 import { preflightTargetFilesWritable } from './preflight-locks.js';
@@ -261,8 +262,9 @@ export class Syncer {
       ? (this.config.stagingDir || deriveDefaultStagingDir(targetDir))
       : targetDir;
 
-    // 1. 扫描源(通过 SourceAdapter — 自动选 FsAdapter 或 HttpAdapter)
-    const adapter = pickAdapter(sourceDir);
+    // 1. 扫描源(通过 SourceAdapter — 自动选 FsAdapter 或 HttpAdapter，附加安全认证凭据)
+    const effectiveAuth = resolveEffectiveAuth(this.config.sourceAuth, this.config.sourceAuthSecretEnv);
+    const adapter = pickAdapter(sourceDir, { auth: effectiveAuth });
     let sourceFilesAll: FileEntry[] = [];
     try {
       sourceFilesAll = await adapter.scan();
@@ -953,10 +955,14 @@ export class Syncer {
     if (isRemotePath(mapping.sourcePath)) {
       // 远程源:走 SourceAdapter(支持 http/https/webdav)
       try {
-        const adapter = pickAdapter(mapping.sourcePath);
+        const effectiveAuth = resolveEffectiveAuth(this.config.sourceAuth, this.config.sourceAuthSecretEnv);
+        const adapter = pickAdapter(mapping.sourcePath, { auth: effectiveAuth });
         // 拿 HEAD / 0字节流检查存在性 + size
         const normalized = mapping.sourcePath.replace(/^webdav:/i, 'https:');
-        const head = await fetch(normalized, { method: 'HEAD' });
+        const headHeaders: Record<string, string> = {};
+        const authH = buildAuthHeaders(effectiveAuth);
+        if (authH) Object.assign(headHeaders, authH);
+        const head = await fetch(normalized, { method: 'HEAD', headers: headHeaders });
         if (head.ok) {
           sourceExists = true;
           try {
@@ -1029,7 +1035,8 @@ export class Syncer {
         await fs.mkdir(dirname(targetPath), { recursive: true });
         if (isRemotePath(mapping.sourcePath)) {
           // 远程源:走 SourceAdapter 流式下载
-          const adapter = pickAdapter(mapping.sourcePath);
+          const effectiveAuth = resolveEffectiveAuth(this.config.sourceAuth, this.config.sourceAuthSecretEnv);
+          const adapter = pickAdapter(mapping.sourcePath, { auth: effectiveAuth });
           try {
             const stream = await adapter.open(mapping.sourcePath);
             await streamToFile(stream, targetPath, Date.now());

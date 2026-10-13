@@ -14,6 +14,8 @@
 
 import { Readable } from 'node:stream';
 import type { ResourceEntry, SourceAdapter, OpenConditionalResult } from './adapter.js';
+import type { SourceAuth } from './types.js';
+import { buildAuthHeaders } from './auth.js';
 import { coreLog } from './logger.js';
 import { parseDirectoryListing, DEFAULT_PARSERS } from './adapters/parsers.js';
 
@@ -23,11 +25,13 @@ const MANIFEST_NAMES = ['.manifest.json', 'manifest.json', 'index.json'];
 export class HttpAdapter implements SourceAdapter {
   readonly kind = 'http' as const;
   private readonly baseUrl: URL;
+  private readonly auth?: SourceAuth;
   /** 扫描结果缓存,避免每次 sync 都重新拉一次(可被调用方清理) */
   private manifestCache: ResourceEntry[] | null = null;
 
-  constructor(source: string) {
+  constructor(source: string, auth?: SourceAuth) {
     this.baseUrl = new URL(source);
+    this.auth = auth;
   }
 
   async scan(): Promise<ResourceEntry[]> {
@@ -101,7 +105,12 @@ export class HttpAdapter implements SourceAdapter {
   }
 
   private async fetch(url: string, init: RequestInit = {}): Promise<Response> {
-    return await fetch(url, init);
+    const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };
+    const authHeaders = buildAuthHeaders(this.auth);
+    if (authHeaders) {
+      Object.assign(headers, authHeaders);
+    }
+    return await fetch(url, { ...init, headers });
   }
 
   private async fetchManifest(name: string): Promise<ResourceEntry[] | null> {

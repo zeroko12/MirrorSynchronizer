@@ -123,6 +123,13 @@ export type SyncMode = 'mirror' | 'bidirectional';
 /** 双向同步冲突解决策略 */
 export type ConflictPolicy = 'rename-target' | 'source-wins' | 'target-wins' | 'manual';
 
+/**
+ * 远程源 (HTTP/WebDAV) 的安全认证凭证
+ */
+export type SourceAuth =
+  | { kind: 'basic'; username: string; password?: string }
+  | { kind: 'cf-access'; clientId: string; clientSecret?: string };
+
 export interface AppConfig {
   sourceDir: string;
   targetDir: string;
@@ -195,6 +202,13 @@ export interface AppConfig {
    * 默认开启,密码随机生成 + bcrypt 存盘
    */
   remote?: RemoteConfig;
+  /**
+   * 远程 source(HTTP/WebDAV)的认证凭证。
+   * 仅当 sourceDir 以 http(s):// 或 webdav:// 开头时生效。
+   */
+  sourceAuth?: SourceAuth;
+  /** secret 字段从哪个系统环境变量读(对应 basic 的 password 或 cf-access 的 clientSecret) */
+  sourceAuthSecretEnv?: string;
 }
 
 export interface RemoteConfig {

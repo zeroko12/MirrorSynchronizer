@@ -146,6 +146,72 @@ npm run sync-once -- --target D:/game/data --backup-dir E:/cold-storage/game-sna
 - `mappingSkippedExisting`:目标已存在且 overwrite=false,跳过
 - `mappingSkipped`:源文件不存在,按 `ifSourceMissing` 跳过
 
+
+## 远程源安全认证 (HTTP / WebDAV)
+
+当 `sourceDir` 为 `http(s)://` 或 `webdav://` 远程文件源且服务端配置了鉴权访问时，可在客户端配置安全认证凭据。
+
+### 支持的认证协议
+
+1. **HTTP Basic Auth**（适用 Nginx / Apache / Caddy / WebDAV 等常见服务器）
+   - **请求头**: `Authorization: Basic <base64(username:password)>`
+2. **Cloudflare Access Service Token**（适用接入 Cloudflare Zero Trust / Cloudflare Access 的服务）
+   - **请求头**: `CF-Access-Client-Id` 与 `CF-Access-Client-Secret`
+
+### 配置方式
+
+#### 1. 桌面端图形界面 (推荐)
+进入 **系统设置 → 目录与模式**，在“更新源路径”下方展开 **安全访问认证**：
+- 启用认证并选择类型（Basic Auth 或 Cloudflare Access）。
+- 填入对应账号与密钥，并可直接点击 **“测试连接”** 即时检验账号密码与远端连通性。
+- **保护隐私 / 避免明文落盘**：可在“从环境变量读取密钥”中填入系统环境变量名（例如 `UPDATE_SOURCE_PASS`），保存时将自动擦除 `config.json` 中的明文密钥，运行时优先读取系统环境变量。
+
+#### 2. `config.json` 手动配置
+
+- **Basic Auth (推荐配合环境变量)**:
+```json
+{
+  "sourceDir": "https://update.example.com/",
+  "sourceAuth": {
+    "kind": "basic",
+    "username": "admin"
+  },
+  "sourceAuthSecretEnv": "SYNC_SOURCE_BASIC_PASS"
+}
+```
+运行前指定环境变量：
+```bash
+# Windows PowerShell
+$env:SYNC_SOURCE_BASIC_PASS="your_password"
+npm run watch
+
+# Linux / macOS
+export SYNC_SOURCE_BASIC_PASS="your_password"
+npm run watch
+```
+
+- **Cloudflare Access Service Token**:
+```json
+{
+  "sourceDir": "https://update.example.com/",
+  "sourceAuth": {
+    "kind": "cf-access",
+    "clientId": "xxxxxx.access"
+  },
+  "sourceAuthSecretEnv": "SYNC_CF_CLIENT_SECRET"
+}
+```
+
+#### 3. CLI 命令行参数
+命令行支持传入认证参数，方便自动化脚本集成：
+```bash
+# Basic Auth
+npm run sync-once -- --source https://update.example.com --source-auth-kind basic --source-auth-user admin --source-auth-secret-env SYNC_SOURCE_BASIC_PASS
+
+# Cloudflare Access
+npm run sync-once -- --source https://update.example.com --source-auth-kind cf-access --source-auth-client-id "xxx.access" --source-auth-secret "secret_key"
+```
+
 ## License
 
 MIT

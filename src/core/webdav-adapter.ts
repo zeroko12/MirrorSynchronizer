@@ -17,6 +17,8 @@
 
 import { Readable } from 'node:stream';
 import type { ResourceEntry, SourceAdapter, OpenConditionalResult } from './adapter.js';
+import type { SourceAuth } from './types.js';
+import { buildAuthHeaders } from './auth.js';
 import { coreLog } from './logger.js';
 import { parseWebdavPropfind } from './adapters/parsers.js';
 import { safeParseContentLength } from './http-adapter.js';
@@ -24,14 +26,29 @@ import { safeParseContentLength } from './http-adapter.js';
 export class WebDAVAdapter implements SourceAdapter {
   readonly kind = 'webdav' as const;
   private readonly baseUrl: URL;
+  private readonly auth?: SourceAuth;
   /** 扫描结果缓存(同 HttpAdapter 的设计) */
   private manifestCache: ResourceEntry[] | null = null;
 
-  constructor(source: string) {
+  constructor(source: string, auth?: SourceAuth) {
     // 归一化 webdav:// → http(s):// 让 URL constructor 能解析
     // webdav:// 通常是 https 的别名(行业惯例:WebDAV = HTTP + 一组方法)
     const normalized = source.replace(/^webdav:/i, 'https:');
     this.baseUrl = new URL(normalized);
+    this.auth = auth;
+  }
+
+  private async fetch(url: string, init: RequestInit = {}): Promise<Response> {
+    const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };
+    const authHeaders = buildAuthHeaders(this.auth);
+    if (authHeaders) {
+      Object.assign(headers, authHeaders);
+    } else if (this.baseUrl.username) {
+      const user = decodeURIComponent(this.baseUrl.username);
+      const pass = decodeURIComponent(this.baseUrl.password || '');
+      headers['Authorization'] = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+    }
+    return await fetch(url, { ...init, headers });
   }
 
   async scan(): Promise<ResourceEntry[]> {
@@ -48,7 +65,7 @@ export class WebDAVAdapter implements SourceAdapter {
   </D:prop>
 </D:propfind>`;
 
-    const res = await fetch(this.baseUrl.href, {
+    const res = await this.fetch(this.baseUrl.href, {
       method: 'PROPFIND',
       headers: {
         'Content-Type': 'application/xml; charset=utf-8',
@@ -74,7 +91,7 @@ export class WebDAVAdapter implements SourceAdapter {
 
   async open(relPath: string): Promise<Readable> {
     const url = this.fileUrl(relPath);
-    const res = await fetch(url, { method: 'GET' });
+    const res = await this.fetch(url, { method: 'GET' });
     if (!res.ok) {
       throw new Error(`HTTP ${res.status} for ${relPath}`);
     }
@@ -86,7 +103,7 @@ export class WebDAVAdapter implements SourceAdapter {
 
   async openConditional(relPath: string, ifNoneMatch: string): Promise<OpenConditionalResult> {
     const url = this.fileUrl(relPath);
-    const res = await fetch(url, {
+    const res = await this.fetch(url, {
       method: 'GET',
       headers: { 'If-None-Match': ifNoneMatch },
     });
