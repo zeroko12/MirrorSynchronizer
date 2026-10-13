@@ -65,7 +65,7 @@ usePolling(refreshStatus, UI_STATUS_POLL_MS, { immediate: true });
 onMounted(() => {
   applyThemeClass();
   refreshStatus();
-  window.api.onUpdatePrompt?.((payload) => {
+  window.api?.onUpdatePrompt?.((payload) => {
     updateDialogRef.value?.showPrompt(payload);
   });
 });
@@ -277,12 +277,12 @@ function handleNavigate(targetTab: 'dashboard' | 'settings' | 'remote' | 'backup
 
           <!-- 视图内容承载区 (占满剩余高度, 内部子页面各自自适应滚动) -->
           <main class="main-content">
-            <DashboardView v-show="tab === 'dashboard'" @navigate="handleNavigate" />
-            <SettingsView v-show="tab === 'settings'" @navigate="handleNavigate" />
-            <RemoteView v-show="tab === 'remote'" />
-            <MappingsView v-show="tab === 'mappings'" />
-            <BackupsView v-show="tab === 'backups'" />
-            <HistoryView v-show="tab === 'history'" />
+            <DashboardView v-if="tab === 'dashboard'" @navigate="handleNavigate" />
+            <SettingsView v-if="tab === 'settings'" @navigate="handleNavigate" />
+            <RemoteView v-if="tab === 'remote'" />
+            <MappingsView v-if="tab === 'mappings'" />
+            <BackupsView v-if="tab === 'backups'" />
+            <HistoryView v-if="tab === 'history'" />
           </main>
         </div>
 

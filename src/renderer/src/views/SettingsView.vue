@@ -13,6 +13,7 @@ import { usePolling } from '../composables/usePolling';
 import {
   NAlert,
   NButton,
+  NCheckbox,
   NDataTable,
   NInput,
   NInputNumber,
@@ -354,23 +355,39 @@ const authBasicUser = ref('');
 const authBasicPass = ref('');
 const authCfClientId = ref('');
 const authCfClientSecret = ref('');
+const authUseEnv = ref(false);
 const authSecretEnv = ref('');
 
+const isRemoteSource = computed(() => {
+  const s = (config.value?.sourceDir || '').trim().toLowerCase();
+  return /^(https?|webdav):\/\//.test(s);
+});
+
 function syncAuthFromConfig() {
-  if (config.value?.sourceAuth) {
+  const currentAuth = config.value?.sourceAuth;
+  const currentEnv = config.value?.sourceAuthSecretEnv;
+
+  if (currentAuth) {
     authEnabled.value = true;
-    authKind.value = config.value.sourceAuth.kind;
-    if (config.value.sourceAuth.kind === 'basic') {
-      authBasicUser.value = config.value.sourceAuth.username || '';
-      authBasicPass.value = config.value.sourceAuth.password || '';
-    } else if (config.value.sourceAuth.kind === 'cf-access') {
-      authCfClientId.value = config.value.sourceAuth.clientId || '';
-      authCfClientSecret.value = config.value.sourceAuth.clientSecret || '';
+    authKind.value = currentAuth.kind;
+    if (currentAuth.kind === 'basic') {
+      authBasicUser.value = currentAuth.username || '';
+      authBasicPass.value = currentAuth.password || '';
+    } else if (currentAuth.kind === 'cf-access') {
+      authCfClientId.value = currentAuth.clientId || '';
+      authCfClientSecret.value = currentAuth.clientSecret || '';
     }
   } else {
     authEnabled.value = false;
   }
-  authSecretEnv.value = config.value?.sourceAuthSecretEnv || '';
+
+  if (currentEnv) {
+    authUseEnv.value = true;
+    authSecretEnv.value = currentEnv;
+  } else {
+    authUseEnv.value = false;
+    authSecretEnv.value = '';
+  }
 }
 
 function buildCurrentAuth(): SourceAuth | undefined {
@@ -379,14 +396,14 @@ function buildCurrentAuth(): SourceAuth | undefined {
     return {
       kind: 'basic',
       username: authBasicUser.value.trim(),
-      password: authBasicPass.value || undefined,
+      password: authUseEnv.value ? undefined : (authBasicPass.value || undefined),
     };
   }
   if (authKind.value === 'cf-access') {
     return {
       kind: 'cf-access',
       clientId: authCfClientId.value.trim(),
-      clientSecret: authCfClientSecret.value || undefined,
+      clientSecret: authUseEnv.value ? undefined : (authCfClientSecret.value || undefined),
     };
   }
   return undefined;
@@ -395,11 +412,7 @@ function buildCurrentAuth(): SourceAuth | undefined {
 function applyAuthToConfig() {
   if (authEnabled.value) {
     const auth = buildCurrentAuth();
-    const env = authSecretEnv.value.trim();
-    if (env && auth) {
-      if (auth.kind === 'basic') delete auth.password;
-      if (auth.kind === 'cf-access') delete auth.clientSecret;
-    }
+    const env = authUseEnv.value ? authSecretEnv.value.trim() : '';
     config.value = {
       ...config.value,
       sourceAuth: auth,
@@ -460,7 +473,7 @@ async function onTestSource() {
   testState.value = { show: true, loading: true, result: null };
   try {
     const auth = buildCurrentAuth();
-    const env = authSecretEnv.value.trim() || undefined;
+    const env = authUseEnv.value ? (authSecretEnv.value.trim() || undefined) : undefined;
     const result = await getApi().sourceTest(source, auth, env);
     testState.value = { show: true, loading: false, result };
   } catch (err) {
@@ -543,7 +556,7 @@ onMounted(async () => {
   if (state) popupEnabled.value = state.popupEnabled;
   const as = await tryLog('autostartGet', () => getApi().autostartGet());
   autostartEnabled.value = as?.openAtLogin ?? false;
-  window.api.onSyncResult?.((result: any) => {
+  window.api?.onSyncResult?.((result: any) => {
     refreshStatus();
     if (result?.executableUpdate === 'success' && result?.launchedPid) {
       message.success('更新已完成并已自动启动程序');
@@ -552,7 +565,7 @@ onMounted(async () => {
       executableUpdateBlocked.value = true;
     }
   });
-  window.api.onSyncPreflight?.((info) => {
+  window.api?.onSyncPreflight?.((info) => {
     if (info.executableLocked) {
       preflightLocked.value = true;
       preflightRelPath.value = info.relPath;
@@ -739,14 +752,19 @@ function formatTime(ts: number | null): string {
                     测试连接
                   </n-button>
                 </div>
+              </div>
+            </div>
 
-                <!-- 远程源安全访问认证配置 -->
-                <div class="auth-settings-container">
-                  <div class="auth-toggle-row">
-                    <div class="auth-text">
-                      <span class="auth-title">安全访问认证 (HTTP / WebDAV 远程源)</span>
-                      <span class="auth-desc">若更新源服务器设置了访问保护，可配置 Basic Auth 或 Cloudflare Access 凭据</span>
-                    </div>
+            <!-- 安全访问认证 (独立标准行) -->
+            <div class="setting-row">
+              <div class="field-label-box">
+                <span class="field-label">访问认证</span>
+                <span class="field-tip">远程 HTTP / WebDAV 鉴权凭证</span>
+              </div>
+              <div class="field-input-box">
+                <div class="auth-setting-wrapper">
+                  <!-- 顶栏：开关与快速提示 -->
+                  <div class="auth-switch-bar">
                     <n-switch
                       :value="authEnabled"
                       @update:value="onToggleAuth"
@@ -754,74 +772,87 @@ function formatTime(ts: number | null): string {
                       <template #checked>已启用</template>
                       <template #unchecked>未启用</template>
                     </n-switch>
+                    <span class="auth-status-hint">
+                      {{ authEnabled ? '已配置源访问凭证' : (isRemoteSource ? '远端源如需密码保护请开启' : '公开源或本地/共享目录无需认证') }}
+                    </span>
                   </div>
 
-                  <!-- 认证表单展开 -->
-                  <div v-if="authEnabled" class="auth-form-card">
-                    <div class="auth-kind-row">
-                      <span class="auth-form-label">认证类型:</span>
+                  <!-- 开启后的卡片：扁平、规整、无多余嵌套 -->
+                  <div v-if="authEnabled" class="auth-config-card">
+                    <div class="auth-header-row">
                       <n-radio-group v-model:value="authKind" size="small">
-                        <n-radio-button value="basic">Basic Auth (用户名 / 密码)</n-radio-button>
-                        <n-radio-button value="cf-access">Cloudflare Access (Service Token)</n-radio-button>
+                        <n-radio-button value="basic">Basic Auth (账密认证)</n-radio-button>
+                        <n-radio-button value="cf-access">Cloudflare Access (Token)</n-radio-button>
                       </n-radio-group>
+
+                      <n-checkbox v-model:checked="authUseEnv" size="small">
+                        从环境变量读取密钥
+                      </n-checkbox>
                     </div>
 
-                    <!-- Basic Auth 输入项 -->
-                    <template v-if="authKind === 'basic'">
-                      <div class="auth-input-grid">
-                        <div class="auth-field">
-                          <span class="auth-field-label">用户名</span>
+                    <!-- 输入行：永远只有 2 个并排输入框，清爽规整 -->
+                    <div class="auth-fields-row">
+                      <!-- Basic Auth -->
+                      <template v-if="authKind === 'basic'">
+                        <div class="auth-input-group">
+                          <label class="auth-input-label">用户名</label>
                           <n-input
                             v-model:value="authBasicUser"
-                            placeholder="请输入 Basic Auth 用户名"
+                            placeholder="请输入用户名"
                           />
                         </div>
-                        <div class="auth-field">
-                          <span class="auth-field-label">访问密码</span>
+                        <div class="auth-input-group">
+                          <label class="auth-input-label">{{ authUseEnv ? '密码环境变量名' : '访问密码' }}</label>
                           <n-input
+                            v-if="!authUseEnv"
                             v-model:value="authBasicPass"
                             type="password"
                             show-password-on="click"
-                            placeholder="请输入密码 (如从环境变量读取可留空)"
+                            placeholder="请输入访问密码"
                           />
+                          <n-input
+                            v-else
+                            v-model:value="authSecretEnv"
+                            placeholder="例如: SYNC_SOURCE_PASS"
+                          />
+                          <span v-if="authUseEnv" class="auth-env-notice">
+                            运行时自动读取该环境变量，配置不落盘明文
+                          </span>
                         </div>
-                      </div>
-                    </template>
+                      </template>
 
-                    <!-- Cloudflare Access 输入项 -->
-                    <template v-else-if="authKind === 'cf-access'">
-                      <div class="auth-input-grid">
-                        <div class="auth-field">
-                          <span class="auth-field-label">Client ID</span>
+                      <!-- Cloudflare Access -->
+                      <template v-else-if="authKind === 'cf-access'">
+                        <div class="auth-input-group">
+                          <label class="auth-input-label">Client ID</label>
                           <n-input
                             v-model:value="authCfClientId"
                             placeholder="例如: xxxxxx.access"
                           />
                         </div>
-                        <div class="auth-field">
-                          <span class="auth-field-label">Client Secret</span>
+                        <div class="auth-input-group">
+                          <label class="auth-input-label">{{ authUseEnv ? 'Secret 环境变量名' : 'Client Secret' }}</label>
                           <n-input
+                            v-if="!authUseEnv"
                             v-model:value="authCfClientSecret"
                             type="password"
                             show-password-on="click"
                             placeholder="请输入 Service Token Secret"
                           />
+                          <n-input
+                            v-else
+                            v-model:value="authSecretEnv"
+                            placeholder="例如: SYNC_CF_SECRET"
+                          />
+                          <span v-if="authUseEnv" class="auth-env-notice">
+                            运行时自动读取该环境变量，配置不落盘明文
+                          </span>
                         </div>
-                      </div>
-                    </template>
+                      </template>
+                    </div>
 
-                    <!-- 环境变量读取安全选项 -->
-                    <div class="auth-env-section">
-                      <div class="auth-env-header">
-                        <span class="auth-field-label">从系统环境变量读取密钥 (推荐高级做法)</span>
-                      </div>
-                      <n-input
-                        v-model:value="authSecretEnv"
-                        placeholder="环境变量名，如: SYNC_SOURCE_SECRET (留空则使用上方输入的密码)"
-                      />
-                      <span class="auth-env-tip">
-                        💡 填写环境变量名后，程序运行时将优先从该环境变量读取密码，配置文件中不会持久化保存密码明文。
-                      </span>
+                    <div v-if="!isRemoteSource" class="auth-remote-hint">
+                      💡 提示：当前更新源为本地或局域网路径，认证配置将在切换为 HTTP / WebDAV 远程源时生效
                     </div>
                   </div>
                 </div>
@@ -1847,101 +1878,82 @@ function formatTime(ts: number | null): string {
 }
 
 
-/* 远程源安全认证配置卡片 */
-.auth-settings-container {
-  margin-top: 10px;
+/* 安全访问认证配置区 (现代化精致排版) */
+.auth-setting-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.auth-switch-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 32px;
+}
+
+.auth-status-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.auth-config-card {
   background: var(--bg-hover);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  box-sizing: border-box;
 }
 
-.auth-toggle-row {
+.auth-header-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
-}
-
-.auth-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.auth-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-main);
-}
-
-.auth-desc {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.auth-form-card {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--border-color);
-}
-
-.auth-kind-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.auth-form-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-main);
-  flex-shrink: 0;
-}
-
-.auth-input-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  flex-wrap: wrap;
   gap: 10px;
 }
 
-.auth-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.auth-fields-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
 
-.auth-field-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
+@media (max-width: 650px) {
+  .auth-fields-row {
+    grid-template-columns: 1fr;
+  }
 }
 
-.auth-env-section {
+.auth-input-group {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 10px 12px;
 }
 
-.auth-env-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.auth-input-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-main);
 }
 
-.auth-env-tip {
+.auth-env-notice {
   font-size: 11px;
-  color: var(--text-dim);
-  line-height: 1.4;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+.auth-remote-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 4px 8px;
+  background: var(--bg-card);
+  border-radius: 4px;
+  border: 1px dashed var(--border-color);
 }
 
 </style>
