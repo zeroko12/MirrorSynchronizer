@@ -600,8 +600,8 @@ const columns: DataTableColumns<FileMapping> = [
 
 .ops-panel-card {
   flex: 1;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   display: flex;
   flex-direction: column;
@@ -611,7 +611,7 @@ const columns: DataTableColumns<FileMapping> = [
 
 .panel-header {
   padding: 16px 20px;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--border-color);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -644,12 +644,12 @@ const columns: DataTableColumns<FileMapping> = [
 .panel-title {
   font-size: 15px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text-main);
 }
 
 .panel-subtitle {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .panel-body {
@@ -685,7 +685,7 @@ const columns: DataTableColumns<FileMapping> = [
 .empty-title {
   font-size: 14px;
   font-weight: 600;
-  color: #334155;
+  color: var(--text-main);
   margin-bottom: 6px;
 }
 
@@ -699,8 +699,8 @@ const columns: DataTableColumns<FileMapping> = [
 
 .panel-footer {
   padding: 12px 20px;
-  border-top: 1px solid #f1f5f9;
-  background: #f8fafc;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;

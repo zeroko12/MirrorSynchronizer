@@ -1073,8 +1073,8 @@ function formatTime(ts: number | null): string {
 
 /* 顶部操作条 */
 .sticky-action-bar {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 12px 20px;
   display: flex;
@@ -1096,7 +1096,7 @@ function formatTime(ts: number | null): string {
 }
 
 .text-normal {
-  color: #64748b;
+  color: var(--text-muted);
   font-size: 13px;
 }
 
@@ -1112,8 +1112,8 @@ function formatTime(ts: number | null): string {
 
 /* 卡片容器 */
 .setting-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 20px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
@@ -1122,14 +1122,14 @@ function formatTime(ts: number | null): string {
 .card-title-group {
   margin-bottom: 16px;
   padding-bottom: 10px;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .card-title {
   margin: 0 0 4px;
   font-size: 15px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text-main);
 }
 
 .card-subtitle {
@@ -1161,7 +1161,7 @@ function formatTime(ts: number | null): string {
 .field-label {
   font-size: 13px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--text-main);
 }
 
 .field-tip {
@@ -1218,8 +1218,8 @@ function formatTime(ts: number | null): string {
   align-items: flex-start;
   gap: 10px;
   padding: 12px 14px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s ease;

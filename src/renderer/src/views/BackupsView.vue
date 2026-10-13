@@ -322,8 +322,8 @@ async function load() {
 
 .ops-panel-card {
   flex: 1;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   display: flex;
   flex-direction: column;
@@ -333,7 +333,7 @@ async function load() {
 
 .panel-header {
   padding: 16px 20px;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--border-color);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -366,12 +366,12 @@ async function load() {
 .panel-title {
   font-size: 15px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text-main);
 }
 
 .panel-subtitle {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .header-actions {
@@ -384,7 +384,7 @@ async function load() {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #f8fafc;
+  background: var(--bg-subtle);
   padding: 4px 10px;
   border-radius: 6px;
   border: 1px solid #e2e8f0;
@@ -436,7 +436,7 @@ async function load() {
 .empty-title {
   font-size: 14px;
   font-weight: 600;
-  color: #334155;
+  color: var(--text-main);
   margin-bottom: 6px;
 }
 
@@ -449,7 +449,7 @@ async function load() {
 
 .panel-footer {
   padding: 12px 20px;
-  border-top: 1px solid #f1f5f9;
+  border-top: 1px solid var(--border-color);
   background: #f8fafc;
   display: flex;
   align-items: center;

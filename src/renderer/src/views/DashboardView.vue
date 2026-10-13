@@ -370,8 +370,8 @@ function formatRelativeTime(ts: number | null): string {
 
 /* 核心状态卡片 */
 .status-hero-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 20px 24px;
   display: flex;
@@ -416,19 +416,19 @@ function formatRelativeTime(ts: number | null): string {
 
 .badge-gray {
   background: #f1f5f9;
-  color: #475569;
+  color: var(--text-muted);
 }
 
 .hero-sync-mode {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .hero-title {
   margin: 0;
   font-size: 18px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text-main);
 }
 
 .hero-desc {
@@ -463,8 +463,8 @@ function formatRelativeTime(ts: number | null): string {
 }
 
 .path-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 14px 16px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
@@ -524,8 +524,8 @@ function formatRelativeTime(ts: number | null): string {
 }
 
 .stat-box {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 14px 16px;
   cursor: pointer;
@@ -570,8 +570,8 @@ function formatRelativeTime(ts: number | null): string {
 
 /* 最近动态卡片 */
 .recent-records-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 16px 20px;
 }
@@ -586,7 +586,7 @@ function formatRelativeTime(ts: number | null): string {
 .records-title {
   font-size: 13px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--text-main);
 }
 
 .records-list {
@@ -607,7 +607,7 @@ function formatRelativeTime(ts: number | null): string {
   align-items: center;
   padding: 8px 10px;
   border-radius: 6px;
-  background: #f8fafc;
+  background: var(--bg-subtle);
   font-size: 12px;
   gap: 12px;
 }

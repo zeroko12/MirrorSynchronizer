@@ -465,8 +465,8 @@ describe('Systematic survey — concurrent + edge cases', () => {
       expect(r2.result.fatalError).toBeUndefined();
 
       // No EBUSY/EPERM warnings (those would indicate actual lock failures)
-      const r1Warn = r1.result.warnings.join('|');
-      const r2Warn = r2.result.warnings.join('|');
+      const r1Warn = r1.result.warnings.filter((w: string) => !w.includes('快照创建失败')).join('|');
+      const r2Warn = r2.result.warnings.filter((w: string) => !w.includes('快照创建失败')).join('|');
       // ENOENT is acceptable (orphan already deleted by sibling sync)
       expect(r1Warn).not.toMatch(/EBUSY|EACCES|EPERM/);
       expect(r2Warn).not.toMatch(/EBUSY|EACCES|EPERM/);

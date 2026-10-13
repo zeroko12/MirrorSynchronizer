@@ -2,10 +2,11 @@
 /**
  * App.vue - 自动更新工具主界面
  *
- * 核心布局:
+ * 核心功能:
  * 1. 左侧导航栏: 顶天立地固定一整列 (高度 100vh), 绝对不随内容变长变短
  * 2. 顶部状态栏: 固定高度 56px, 水平线与侧栏 Logo 严格齐平
- * 3. 右侧主视口: 统一版心宽度, 切换 Tab 绝无任何布局跳动与变形
+ * 3. 黑白主题切换: 支持深浅色模式即时无缝切换, 状态持久化到本地存储
+ * 4. 右侧主视口: 统一版心宽度, 切换 Tab 绝无任何布局跳动与变形
  */
 
 import { ref, computed, onMounted } from 'vue';
@@ -14,6 +15,7 @@ import {
   NMessageProvider,
   NButton,
   NTag,
+  darkTheme,
   zhCN,
   dateZhCN,
 } from 'naive-ui';
@@ -33,6 +35,23 @@ const updateDialogRef = ref<InstanceType<typeof UpdateDialog> | null>(null);
 const status = ref<StatusInfo | null>(null);
 const syncing = ref(false);
 
+// 黑白主题模式状态管理
+const isDark = ref(localStorage.getItem('mirror_sync_theme') === 'dark');
+
+function toggleTheme() {
+  isDark.value = !isDark.value;
+  localStorage.setItem('mirror_sync_theme', isDark.value ? 'dark' : 'light');
+  applyThemeClass();
+}
+
+function applyThemeClass() {
+  if (isDark.value) {
+    document.documentElement.classList.add('dark');
+  } else {
+    document.documentElement.classList.remove('dark');
+  }
+}
+
 async function refreshStatus() {
   const s = await tryLog('getStatus', () => getApi().getStatus());
   if (s) status.value = s;
@@ -41,6 +60,7 @@ async function refreshStatus() {
 usePolling(refreshStatus, UI_STATUS_POLL_MS, { immediate: true });
 
 onMounted(() => {
+  applyThemeClass();
   refreshStatus();
   window.api.onUpdatePrompt?.((payload) => {
     updateDialogRef.value?.showPrompt(payload);
@@ -74,12 +94,13 @@ function handleNavigate(targetTab: 'dashboard' | 'settings' | 'backups' | 'histo
 
 <template>
   <n-config-provider
+    :theme="isDark ? darkTheme : null"
     :locale="zhCN"
     :date-locale="dateZhCN"
     style="width: 100%; height: 100%; display: flex;"
   >
     <n-message-provider>
-      <div class="user-workbench">
+      <div class="user-workbench" :class="{ 'theme-dark': isDark }">
         <!-- 1. 左侧功能导航 (贯穿全屏高度一列到底) -->
         <aside class="workbench-sidebar">
           <div class="sidebar-brand">
@@ -193,6 +214,30 @@ function handleNavigate(targetTab: 'dashboard' | 'settings' | 'backups' | 'histo
                 连接正常
               </n-tag>
 
+              <!-- 黑白主题切换按钮 -->
+              <button
+                class="theme-toggle-btn"
+                :title="isDark ? '切换至明亮模式' : '切换至暗黑模式'"
+                @click="toggleTheme"
+              >
+                <!-- 太阳图标 (暗黑模式下显示，点击切明亮) -->
+                <svg v-if="isDark" viewBox="0 0 24 24" class="theme-icon" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="5" />
+                  <line x1="12" y1="1" x2="12" y2="3" />
+                  <line x1="12" y1="21" x2="12" y2="23" />
+                  <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                  <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                  <line x1="1" y1="12" x2="3" y2="12" />
+                  <line x1="21" y1="12" x2="23" y2="12" />
+                  <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                  <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+                </svg>
+                <!-- 月亮图标 (明亮模式下显示，点击切暗黑) -->
+                <svg v-else viewBox="0 0 24 24" class="theme-icon" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                </svg>
+              </button>
+
               <n-button
                 type="primary"
                 size="medium"
@@ -237,9 +282,9 @@ body {
   width: 100vw;
   height: 100vh;
   overflow: hidden;
-  background: #f8fafc;
+  background: var(--bg-page);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  color: #1e293b;
+  color: var(--text-main);
   user-select: none;
 }
 
@@ -257,16 +302,17 @@ body {
   overflow: hidden;
 }
 
-/* 侧边栏: 必须顶天立地, 占满 100vh, 绝对不随内容变长变短 */
+/* 侧边栏: 顶天立地, 占满 100vh */
 .workbench-sidebar {
   width: 200px;
   height: 100vh;
-  background: #0f172a;
-  border-right: 1px solid #1e293b;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   box-sizing: border-box;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 .sidebar-brand {
@@ -275,7 +321,7 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  border-bottom: 1px solid #1e293b;
+  border-bottom: 1px solid var(--sidebar-border);
   flex-shrink: 0;
   box-sizing: border-box;
 }
@@ -342,7 +388,7 @@ body {
 }
 
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.06);
   color: #f1f5f9;
 }
 
@@ -350,6 +396,11 @@ body {
   background: #1e293b;
   color: #38bdf8;
   font-weight: 600;
+}
+
+.theme-dark .nav-item.active {
+  background: #1e293b;
+  color: #38bdf8;
 }
 
 .nav-icon {
@@ -406,21 +457,23 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: #f8fafc;
+  background: var(--bg-page);
   overflow: hidden;
   box-sizing: border-box;
+  transition: background-color 0.2s ease;
 }
 
 .main-topbar {
   height: 56px;
   padding: 0 24px;
-  background: #ffffff;
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--topbar-bg);
+  border-bottom: 1px solid var(--topbar-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
   box-sizing: border-box;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 .topbar-heading {
@@ -433,12 +486,12 @@ body {
   margin: 0;
   font-size: 16px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text-main);
 }
 
 .heading-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .topbar-actions {
@@ -449,6 +502,32 @@ body {
 
 .state-pill {
   font-size: 12px;
+}
+
+/* 主题切换按钮 */
+.theme-toggle-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.theme-toggle-btn:hover {
+  background: var(--bg-subtle);
+  color: var(--text-main);
+  border-color: var(--text-muted);
+}
+
+.theme-icon {
+  width: 16px;
+  height: 16px;
 }
 
 .sync-primary-btn {
