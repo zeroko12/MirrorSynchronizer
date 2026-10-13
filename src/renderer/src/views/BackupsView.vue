@@ -208,17 +208,17 @@ async function load() {
       <div class="panel-header">
         <div class="header-left">
           <div class="header-title-row">
-            <span class="panel-tag">SNAPSHOT ENGINE</span>
-            <span class="panel-title">历史快照归档与秒级回退</span>
+            
+            <span class="panel-title">历史备份与还原</span>
           </div>
           <span class="panel-subtitle">
-            共归档 {{ items.length }} 个版本快照 · 发生意外或异常部署时可一键回退到指定时间点
+            共保留 {{ items.length }} 个历史版本 · 遇到更新问题时可随时一键还原到之前的版本
           </span>
         </div>
 
         <div class="header-actions">
           <div class="quota-control">
-            <span class="quota-label">保留快照配额:</span>
+            <span class="quota-label">最多保留:</span>
             <n-input-number
               :value="config.backupCount"
               :min="1"
@@ -240,7 +240,7 @@ async function load() {
           v-if="loadError"
           type="error"
           closable
-          title="快照目录加载失败"
+          title="备份列表加载失败"
         >
           {{ loadError }}
         </n-alert>
@@ -248,7 +248,7 @@ async function load() {
           v-if="lastActionError"
           type="error"
           closable
-          title="回滚/删除操作异常"
+          title="还原或删除失败"
         >
           <pre style="white-space: pre-wrap; margin: 0; font-size: 12px">{{ lastActionError }}</pre>
         </n-alert>
@@ -257,7 +257,7 @@ async function load() {
           type="success"
           closable
         >
-          ✓ 回退/归档事务执行完毕 · {{ formatTime(lastSuccessAt) }}
+          ✓ 版本还原成功 · {{ formatTime(lastSuccessAt) }}
         </n-alert>
       </div>
 
@@ -269,9 +269,9 @@ async function load() {
             <rect x="1" y="3" width="22" height="5" />
             <line x1="10" y1="12" x2="14" y2="12" />
           </svg>
-          <span class="empty-title">暂无归档的快照版本</span>
+          <span class="empty-title">暂无历史备份</span>
           <span class="empty-desc">
-            当同步引擎首次检测到源端变动并准备覆盖本地文件前，系统将自动创建目标目录的全量快照归档并在此列出。
+            系统在每次执行更新替换文件前，会自动为您备份当前版本，方便随时一键撤销与还原。
           </span>
         </div>
 
@@ -294,7 +294,7 @@ async function load() {
       <!-- 面板底部状态栏 -->
       <div class="panel-footer">
         <span class="footer-tip">
-          🛡️ 安全防护: 执行"回退"前，系统会自动对目标当前目录生成一份新的安全保护快照。任何回滚操作均 100% 可逆。
+          🛡️ 安全提示: 点击"回退"还原前，系统会自动为您备份当前的文件状态，任意时刻均可二次还原，数据安全有保障。
         </span>
       </div>
     </div>

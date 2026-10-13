@@ -381,11 +381,11 @@ const columns: DataTableColumns<FileMapping> = [
       <div class="panel-header">
         <div class="header-left">
           <div class="header-title-row">
-            <span class="panel-tag">PROTECTION & INJECTION</span>
-            <span class="panel-title">文件映射与保护规则</span>
+            
+            <span class="panel-title">本地文件保护</span>
           </div>
           <span class="panel-subtitle">
-            共 {{ (config.fileMappings ?? []).length }} 条生效规则 · 映射目标文件享有豁免保护，绝不会被镜像流水线误删
+            共 {{ (config.fileMappings ?? []).length }} 个保护文件 · 此处添加的文件在软件更新时会自动保留，不会被覆盖
           </span>
         </div>
         <div class="header-actions">
@@ -396,7 +396,7 @@ const columns: DataTableColumns<FileMapping> = [
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
             </template>
-            新建保护规则
+            添加保护文件
           </n-button>
         </div>
       </div>
@@ -407,12 +407,12 @@ const columns: DataTableColumns<FileMapping> = [
           <svg class="empty-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
           </svg>
-          <span class="empty-title">当前尚未配置任何文件映射规则</span>
+          <span class="empty-title">暂无需要保护的文件</span>
           <span class="empty-desc">
-            若目标部署目录含有特有的本地配置文件、许可证授权文件或外部模板，可在此添加规则以防止被同步覆盖或清除。
+            如果您本地有独特的配置文件（如用户设置、本地数据库或个性化配置）不希望在更新时被覆盖，可在此添加。
           </span>
           <n-button type="primary" size="small" @click="openAdd" style="margin-top: 8px">
-            立即创建第一条规则
+            添加保护文件
           </n-button>
         </div>
 
@@ -434,7 +434,7 @@ const columns: DataTableColumns<FileMapping> = [
       <!-- 面板底部状态栏 -->
       <div class="panel-footer">
         <span class="footer-tip">
-          💡 提示: 启用的规则将在每次主同步完成后即刻触发。规则源文件支持本地绝对路径、UNC 共享及 HTTP/WebDAV 远程拉取。
+          💡 提示: 已启用的文件在更新后会自动保留本地修改，确保您的个性化配置不丢失。
         </span>
       </div>
     </div>

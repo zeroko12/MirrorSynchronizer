@@ -1,12 +1,11 @@
 <script setup lang="ts">
 /**
- * DashboardView.vue - 专业运维监控看板 (Ops Monitoring Console)
+ * DashboardView.vue - 状态看板 (用户友好版)
  *
- * 核心架构:
- * 1. 同步链路拓扑 (Pipeline Topology): 源端 -> 传输引擎 -> 部署目标
- * 2. 关键运行指标 (Telemetry KPIs): 节点状态、文件基数、耗时、快照数
- * 3. 运维控制台指令 (Ops Command Bar): 立即同步、应用暂存、秒级回滚、连通性探测
- * 4. 审计流水摘要 (Audit Stream): 最近执行事务记录
+ * 核心目标:
+ * 1. 简单直观呈现当前是否为最新版本
+ * 2. 醒目、便捷的一键同步与应用更新操作
+ * 3. 清晰明了的更新来源与本机目录展示
  */
 
 import { ref, computed, onMounted } from 'vue';
@@ -21,6 +20,7 @@ import { useConfig } from '../composables/useConfig';
 import { usePolling } from '../composables/usePolling';
 import { UI_STATUS_POLL_MS } from '@core/constants';
 import { tryLog } from '../utils/try-log';
+import { labelOf } from '@core/labels';
 
 const emit = defineEmits<{
   (e: 'navigate', tab: 'settings' | 'mappings' | 'backups' | 'history'): void;
@@ -64,46 +64,69 @@ onMounted(async () => {
   await refreshTelemetry();
 });
 
-// 节点就绪与状态判定
 const isConfigured = computed(() => {
   return Boolean(config.value?.sourceDir && config.value?.targetDir);
 });
 
-const pipelineStatus = computed(() => {
-  if (!isConfigured.value) return { code: 'UNCONFIGURED', label: '节点未配置', type: 'default' };
-  if (pendingApplyCount.value > 0) return { code: 'PENDING_APPLY', label: '暂存就绪 (待应用)', type: 'info' };
-  const lr = status.value?.lastResult;
-  if (!lr) return { code: 'WAITING_FIRST_RUN', label: '就绪 (待执行首次同步)', type: 'default' };
-  if (!lr.ok) return { code: 'ERROR', label: '同步告警', type: 'error' };
-  if (lr.added > 0 || lr.modified > 0 || lr.deleted > 0) return { code: 'DIFF_ACTIVE', label: '已对齐最新版本', type: 'success' };
-  return { code: 'IN_SYNC', label: '两端状态完全同步', type: 'success' };
-});
-
-const sourceProtocol = computed(() => {
-  const src = config.value?.sourceDir || '';
-  if (/^https?:\/\//i.test(src)) return 'HTTP(S)';
-  if (/^webdav:\/\//i.test(src)) return 'WEBDAV';
-  if (/^\\\\/i.test(src)) return 'SMB (UNC)';
-  return 'LOCAL FS';
-});
-
-// 运维指令执行
-async function handleTriggerSync() {
+const statusSummary = computed(() => {
   if (!isConfigured.value) {
-    emit('navigate', 'settings');
-    return;
+    return {
+      title: '尚未配置目录',
+      desc: '请先设置更新源目录和本机程序目录',
+      badgeClass: 'badge-gray',
+      badgeText: '未配置',
+      icon: 'config',
+    };
   }
+  if (pendingApplyCount.value > 0) {
+    return {
+      title: `发现新版本 (${pendingApplyCount.value} 个文件待更新)`,
+      desc: '更新文件已下载完成，点击下方按钮即可立即生效',
+      badgeClass: 'badge-blue',
+      badgeText: '有新版本',
+      icon: 'download',
+    };
+  }
+  const lr = status.value?.lastResult;
+  if (!lr) {
+    return {
+      title: '准备就绪',
+      desc: '尚未执行首次检查，可点击立即同步',
+      badgeClass: 'badge-green',
+      badgeText: '就绪',
+      icon: 'ready',
+    };
+  }
+  if (!lr.ok) {
+    return {
+      title: '同步遇到问题',
+      desc: recentHistory.value[0]?.fatalError || (status.value?.lastFatalReason ? labelOf(status.value.lastFatalReason) : '未能成功同步，请检查网络或路径权限'),
+      badgeClass: 'badge-red',
+      badgeText: '同步异常',
+      icon: 'error',
+    };
+  }
+  return {
+    title: '已是最新版本',
+    desc: '本机文件与更新源保持一致',
+    badgeClass: 'badge-green',
+    badgeText: '已对齐',
+    icon: 'success',
+  };
+});
+
+async function handleSyncNow() {
   syncing.value = true;
   try {
     const res = await getApi().runSyncNowForce();
     if (res.ok) {
-      message.success('同步事务执行完毕');
+      message.success('同步检查完成');
     } else {
-      message.warning(res.error || '同步未完全执行');
+      message.warning(res.error || '同步未执行');
     }
     await refreshTelemetry();
   } catch (err) {
-    message.error(`执行失败: ${(err as Error).message}`);
+    message.error((err as Error).message || '同步异常');
   } finally {
     syncing.value = false;
   }
@@ -114,277 +137,213 @@ async function handleApplyStaging() {
   try {
     const res = await getApi().syncApplyNow();
     if (res.ok) {
-      message.success(`成功原子替换 ${res.applied} 个暂存文件`);
+      message.success(`更新已应用: ${res.applied} 个文件已生效`);
       await refreshTelemetry();
     } else {
-      message.error(res.error || '应用失败');
+      message.error(res.error || '应用更新失败');
     }
-  } catch (err) {
-    message.error(`操作异常: ${(err as Error).message}`);
   } finally {
     applyingStaging.value = false;
   }
 }
 
-async function handleQuickRollback() {
-  if (backups.value.length === 0) {
-    message.warning('当前无可用快照');
-    return;
-  }
-  const latestBackup = backups.value[0];
-  rollingBack.value = true;
-  try {
-    const res = await getApi().backupRollback(latestBackup.id);
-    if (res.ok) {
-      message.success(`已执行原子回退至快照: ${new Date(latestBackup.createdAt).toLocaleString('zh-CN')}`);
-      await refreshTelemetry();
-    } else {
-      message.error(res.error || '回退失败');
-    }
-  } catch (err) {
-    message.error(`回退异常: ${(err as Error).message}`);
-  } finally {
-    rollingBack.value = false;
-  }
-}
-
-async function handlePingSource() {
+async function handleTestConnection() {
   if (!config.value?.sourceDir) return;
   pinging.value = true;
   try {
     const res = await getApi().sourceTest(config.value.sourceDir);
     if (res.ok) {
-      message.success(`源端探测正常 (已发现 ${res.fileCount} 个条目)`);
+      message.success(`更新源连接正常 (包含 ${res.fileCount} 个文件)`);
     } else {
-      message.error(`源端不可达: ${res.error || '连接超时'}`);
+      message.error(`更新源无法连接: ${res.error || '请检查路径'}`);
     }
-  } catch (err) {
-    message.error(`探测失败: ${(err as Error).message}`);
   } finally {
     pinging.value = false;
   }
 }
 
-function formatRelativeTime(ts: number | null | undefined): string {
-  if (!ts) return '-';
-  const diffSec = Math.floor((Date.now() - ts) / 1000);
-  if (diffSec < 60) return `${diffSec}秒前`;
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}分钟前`;
-  return new Date(ts).toLocaleTimeString('zh-CN');
+async function handleRollbackLatest() {
+  if (backups.value.length === 0) return;
+  rollingBack.value = true;
+  try {
+    const targetB = backups.value[0];
+    const res = await getApi().backupRollback(targetB.id);
+    if (res.ok) {
+      message.success('已成功还原到上一个备份版本');
+      await refreshTelemetry();
+    } else {
+      message.error(res.error || '还原失败');
+    }
+  } finally {
+    rollingBack.value = false;
+  }
+}
+
+function formatRelativeTime(ts: number | null): string {
+  if (!ts) return '尚未同步';
+  return new Date(ts).toLocaleString('zh-CN');
 }
 </script>
 
 <template>
-  <div class="ops-dashboard">
-    <n-spin :show="configLoading || syncing">
-      <div class="dashboard-stream">
-        <!-- 1. 链路拓扑与通道状态栏 (Pipeline Topology) -->
-        <div class="topology-panel">
-          <div class="topology-header">
-            <div class="pipeline-title-group">
-              <span class="pipeline-tag">PIPELINE TOPOLOGY</span>
-              <span class="pipeline-state-dot" :class="pipelineStatus.code.toLowerCase()" />
-              <span class="pipeline-state-label">{{ pipelineStatus.label }}</span>
+  <div class="user-dashboard-view">
+    <n-spin :show="configLoading">
+      <div class="dashboard-body">
+        <!-- 1. 核心状态大看板 -->
+        <div class="status-hero-card">
+          <div class="hero-left">
+            <div class="hero-badge-row">
+              <span class="status-pill" :class="statusSummary.badgeClass">
+                {{ statusSummary.badgeText }}
+              </span>
+              <span class="hero-sync-mode">
+                模式: {{ config?.syncMode === 'bidirectional' ? '双向同步' : '单向镜像 (推荐)' }}
+              </span>
             </div>
+            <h2 class="hero-title">{{ statusSummary.title }}</h2>
+            <p class="hero-desc">{{ statusSummary.desc }}</p>
+          </div>
 
-            <div class="topology-controls">
-              <n-button
-                size="tiny"
-                quaternary
-                :loading="pinging"
-                class="ops-action-btn"
-                @click="handlePingSource"
-              >
-                测试连通性
+          <div class="hero-actions">
+            <!-- 暂存更新模式下，有待更新文件时高亮显示应用按钮 -->
+            <n-button
+              v-if="pendingApplyCount > 0"
+              type="primary"
+              size="large"
+              :loading="applyingStaging"
+              class="primary-action-btn"
+              @click="handleApplyStaging"
+            >
+              立即应用新版本 ({{ pendingApplyCount }})
+            </n-button>
+
+            <!-- 常规同步按钮 -->
+            <n-button
+              v-else
+              type="primary"
+              size="large"
+              :loading="syncing"
+              class="primary-action-btn"
+              @click="handleSyncNow"
+            >
+              <template #icon>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <polyline points="23 4 23 10 17 10" />
+                  <polyline points="1 20 1 14 7 14" />
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+              </template>
+              立即检查并同步
+            </n-button>
+
+            <div class="hero-sub-actions">
+              <n-button size="small" :loading="pinging" @click="handleTestConnection">
+                测试源连接
               </n-button>
-              <n-button
-                size="tiny"
-                type="primary"
-                :loading="syncing"
-                class="ops-action-btn"
-                @click="handleTriggerSync"
-              >
-                立即同步
-              </n-button>
-            </div>
-          </div>
-
-          <!-- 拓扑三节点视图 -->
-          <div class="pipeline-flow">
-            <!-- 节点 1: 源端 -->
-            <div class="flow-node">
-              <div class="node-badge-row">
-                <span class="node-kind-badge">{{ sourceProtocol }}</span>
-                <span class="node-meta">源端存储</span>
-              </div>
-              <div class="node-path monospace-text" :title="config?.sourceDir">
-                {{ config?.sourceDir || '未配置 SOURCE_DIR' }}
-              </div>
-              <div class="node-metrics">
-                <span class="metric-item">条目: <b>{{ fileCount ? fileCount.source : '-' }}</b></span>
-                <span class="metric-divider">/</span>
-                <span class="metric-item status-ok">连接正常</span>
-              </div>
-            </div>
-
-            <!-- 通道传输介质与模式 -->
-            <div class="flow-channel">
-              <div class="channel-line">
-                <div class="channel-pulse" />
-              </div>
-              <div class="channel-badge">
-                <span v-if="config?.syncMode === 'bidirectional'">BIDIRECTIONAL (双向)</span>
-                <span v-else>MIRROR (单向镜像)</span>
-              </div>
-              <div class="channel-mode-sub">
-                {{ config?.applyMode === 'staging' ? 'STAGING 原子切换' : 'DIRECT 直接覆写' }}
-              </div>
-            </div>
-
-            <!-- 节点 2: 目标部署节点 -->
-            <div class="flow-node">
-              <div class="node-badge-row">
-                <span class="node-kind-badge target">DEPLOY TARGET</span>
-                <span class="node-meta">目标本地目录</span>
-              </div>
-              <div class="node-path monospace-text" :title="config?.targetDir">
-                {{ config?.targetDir || '未配置 TARGET_DIR' }}
-              </div>
-              <div class="node-metrics">
-                <span class="metric-item">条目: <b>{{ fileCount ? fileCount.target : '-' }}</b></span>
-                <span class="metric-divider">/</span>
-                <span class="metric-item">保护规则: <b>{{ config?.fileMappings?.filter(m => m.enabled).length ?? 0 }}</b></span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 2. 运维监控 KPI 指标卡片行 -->
-        <div class="kpi-grid">
-          <div class="kpi-card" @click="emit('navigate', 'settings')">
-            <div class="kpi-label">目标节点总数</div>
-            <div class="kpi-value monospace-text">
-              {{ fileCount ? fileCount.target.toLocaleString() : '0' }}
-              <span class="kpi-unit">FILES</span>
-            </div>
-            <div class="kpi-footer">
-              源端基准: {{ fileCount ? fileCount.source.toLocaleString() : '0' }}
-            </div>
-          </div>
-
-          <div class="kpi-card">
-            <div class="kpi-label">上次同步耗时</div>
-            <div class="kpi-value monospace-text">
-              {{ status?.lastResult ? status.lastResult.durationMs : 0 }}
-              <span class="kpi-unit">MS</span>
-            </div>
-            <div class="kpi-footer">
-              上次执行: {{ formatRelativeTime(recentHistory[0]?.startedAt) }}
-            </div>
-          </div>
-
-          <div class="kpi-card" @click="emit('navigate', 'backups')">
-            <div class="kpi-label">快照版本归档</div>
-            <div class="kpi-value monospace-text">
-              {{ backups.length }}
-              <span class="kpi-unit">SNAPSHOTS</span>
-            </div>
-            <div class="kpi-footer">
               <n-popconfirm
                 v-if="backups.length > 0"
-                @positive-click="handleQuickRollback"
+                @positive-click="handleRollbackLatest"
+                positive-text="确认还原"
+                negative-text="取消"
               >
                 <template #trigger>
-                  <span class="link-span" @click.stop>一键回退到上一版</span>
+                  <n-button size="small" :loading="rollingBack">
+                    还原上一版本
+                  </n-button>
                 </template>
-                确定回滚目标目录到上一快照吗?
+                确认还原到上一个历史版本吗？当前内容会被自动备份。
               </n-popconfirm>
-              <span v-else>暂无备份</span>
-            </div>
-          </div>
-
-          <div class="kpi-card" @click="emit('navigate', 'mappings')">
-            <div class="kpi-label">受保护规则项</div>
-            <div class="kpi-value monospace-text">
-              {{ config?.fileMappings?.filter(m => m.enabled).length ?? 0 }}
-              <span class="kpi-unit">RULES</span>
-            </div>
-            <div class="kpi-footer">
-              豁免镜像删除与本地保护
             </div>
           </div>
         </div>
 
-        <!-- 3. Staging 暂存更新警告操作条 (若有就绪文件) -->
-        <div v-if="pendingApplyCount > 0" class="staging-alert-panel">
-          <div class="staging-alert-content">
-            <span class="staging-pill">STAGING READY</span>
-            <span class="staging-text">
-              检测到 <b>{{ pendingApplyCount }}</b> 个更新文件已暂存，目标程序处于保护状态。点击立即执行秒级原子切换。
-            </span>
+        <!-- 2. 路径流向对比卡片 -->
+        <div class="path-compare-grid">
+          <div class="path-card">
+            <div class="path-card-header">
+              <span class="path-label">更新来源目录</span>
+              <span class="path-meta">{{ fileCount ? `${fileCount.source} 个文件` : '-' }}</span>
+            </div>
+            <div class="path-value-text" :title="config?.sourceDir">
+              {{ config?.sourceDir || '未设置更新来源路径' }}
+            </div>
           </div>
-          <n-button
-            type="primary"
-            size="small"
-            :loading="applyingStaging"
-            @click="handleApplyStaging"
-          >
-            立即应用至目标程序
-          </n-button>
+
+          <div class="path-arrow-col">
+            <svg class="arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="5" y1="12" x2="19" y2="12" />
+              <polyline points="12 5 19 12 12 19" />
+            </svg>
+            <span class="arrow-tip">{{ config?.syncMode === 'bidirectional' ? '双向' : '更新至' }}</span>
+          </div>
+
+          <div class="path-card">
+            <div class="path-card-header">
+              <span class="path-label">本机程序目录</span>
+              <span class="path-meta">{{ fileCount ? `${fileCount.target} 个文件` : '-' }}</span>
+            </div>
+            <div class="path-value-text" :title="config?.targetDir">
+              {{ config?.targetDir || '未设置本机安装路径' }}
+            </div>
+          </div>
         </div>
 
-        <!-- 4. 事务流水审计表格 (Audit Stream Table) -->
-        <div class="audit-panel">
-          <div class="audit-header">
-            <span class="audit-title">TRANSACTION AUDIT STREAM (最近事务流水)</span>
-            <n-button text type="primary" size="tiny" @click="emit('navigate', 'history')">
-              查看全部历史日志 →
+        <!-- 3. 三栏快捷指标 -->
+        <div class="quick-stats-grid">
+          <div class="stat-box" @click="emit('navigate', 'history')">
+            <span class="stat-title">上次检查时间</span>
+            <span class="stat-value small-text">{{ formatRelativeTime(recentHistory.length > 0 ? recentHistory[0].startedAt : null) }}</span>
+            <span class="stat-foot">耗时 {{ status?.lastResult?.durationMs ?? 0 }}ms</span>
+          </div>
+
+          <div class="stat-box" @click="emit('navigate', 'backups')">
+            <span class="stat-title">可用历史备份</span>
+            <span class="stat-value">{{ backups.length }} <span class="stat-unit">个版本</span></span>
+            <span class="stat-foot">随时可一键还原</span>
+          </div>
+
+          <div class="stat-box" @click="emit('navigate', 'mappings')">
+            <span class="stat-title">受保护文件规则</span>
+            <span class="stat-value">{{ config?.fileMappings?.length ?? 0 }} <span class="stat-unit">条</span></span>
+            <span class="stat-foot">免受更新覆盖</span>
+          </div>
+        </div>
+
+        <!-- 4. 最近同步记录 -->
+        <div class="recent-records-card">
+          <div class="records-header">
+            <span class="records-title">最近同步动态</span>
+            <n-button text type="primary" size="small" @click="emit('navigate', 'history')">
+              查看全部记录 &gt;
             </n-button>
           </div>
 
-          <div class="audit-table-wrapper">
-            <table class="ops-table">
-              <thead>
-                <tr>
-                  <th style="width: 170px">执行时间 (UTC/Local)</th>
-                  <th style="width: 100px">结果状态</th>
-                  <th style="width: 90px">耗时</th>
-                  <th style="width: 220px">变更指标 (+增 / ~改 / -删)</th>
-                  <th>事务详情</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-if="recentHistory.length === 0">
-                  <td colspan="5" class="empty-td">暂无同步事务记录</td>
-                </tr>
-                <tr v-for="item in recentHistory" :key="item.id">
-                  <td class="monospace-text">{{ new Date(item.startedAt).toLocaleString('zh-CN') }}</td>
-                  <td>
-                    <span
-                      class="status-pill"
-                      :class="item.fatalError === null ? 'status-ok' : 'status-err'"
-                    >
-                      {{ item.fatalError === null ? 'SUCCESS' : 'FAILED' }}
-                    </span>
-                  </td>
-                  <td class="monospace-text">{{ item.durationMs }}ms</td>
-                  <td>
-                    <span class="diff-chip add">+{{ item.addedCount }}</span>
-                    <span class="diff-chip mod">~{{ item.modifiedCount }}</span>
-                    <span class="diff-chip del">-{{ item.deletedCount }}</span>
-                  </td>
-                  <td class="log-detail-td">
-                    <span v-if="item.fatalError" class="err-text">{{ item.fatalError }}</span>
-                    <span v-else-if="item.addedCount === 0 && item.modifiedCount === 0 && item.deletedCount === 0" class="muted-text">
-                      两端无差异 (一致)
-                    </span>
-                    <span v-else class="normal-text">
-                      同步成功落盘 (包含 {{ item.mappingCopiedCount }} 个映射项)
-                    </span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div class="records-list">
+            <div v-if="recentHistory.length === 0" class="empty-record">
+              暂无同步记录，点击上方按钮开始第一次检查
+            </div>
+
+            <div v-for="item in recentHistory" :key="item.id" class="record-item">
+              <div class="record-time">
+                {{ new Date(item.startedAt).toLocaleString('zh-CN') }}
+              </div>
+              <div class="record-status">
+                <span class="mini-tag" :class="item.fatalError === null ? 'tag-ok' : 'tag-err'">
+                  {{ item.fatalError === null ? '成功' : '失败' }}
+                </span>
+              </div>
+              <div class="record-changes">
+                <span v-if="item.addedCount > 0" class="change-tag add">+{{ item.addedCount }} 新增</span>
+                <span v-if="item.modifiedCount > 0" class="change-tag mod">~{{ item.modifiedCount }} 修改</span>
+                <span v-if="item.deletedCount > 0" class="change-tag del">-{{ item.deletedCount }} 删除</span>
+                <span v-if="item.addedCount === 0 && item.modifiedCount === 0 && item.deletedCount === 0" class="change-tag none">
+                  无文件变动
+                </span>
+              </div>
+              <div class="record-duration">
+                {{ item.durationMs }}ms
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -393,394 +352,328 @@ function formatRelativeTime(ts: number | null | undefined): string {
 </template>
 
 <style scoped>
-.ops-dashboard {
-  padding: 20px 24px;
+.user-dashboard-view {
   height: 100%;
   overflow-y: auto;
+  padding: 20px 24px;
   box-sizing: border-box;
 }
 
-.dashboard-stream {
-  max-width: 1100px;
+.dashboard-body {
+  max-width: 960px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
-/* 拓扑卡片 (Topology) */
-.topology-panel {
+/* 核心状态卡片 */
+.status-hero-card {
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  padding: 16px 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
-}
-
-.topology-header {
+  padding: 20px 24px;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #f1f5f9;
+  justify-content: space-between;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
 }
 
-.pipeline-title-group {
+.hero-left {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hero-badge-row {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.pipeline-tag {
+.status-pill {
   font-size: 11px;
   font-weight: 700;
-  color: #64748b;
-  letter-spacing: 0.5px;
-  font-family: monospace;
-}
-
-.pipeline-state-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #94a3b8;
-}
-
-.pipeline-state-dot.in_sync,
-.pipeline-state-dot.diff_active {
-  background: #10b981;
-  box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
-}
-
-.pipeline-state-dot.pending_apply {
-  background: #3b82f6;
-  box-shadow: 0 0 6px rgba(59, 130, 246, 0.6);
-}
-
-.pipeline-state-dot.error {
-  background: #ef4444;
-  box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
-}
-
-.pipeline-state-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: #1e293b;
-}
-
-.topology-controls {
-  display: flex;
-  gap: 8px;
-}
-
-/* 拓扑节点流 */
-.pipeline-flow {
-  display: grid;
-  grid-template-columns: 1fr 180px 1fr;
-  align-items: center;
-  gap: 16px;
-}
-
-.flow-node {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  padding: 12px 14px;
-}
-
-.node-badge-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
-
-.node-kind-badge {
-  font-size: 10px;
-  font-weight: 700;
-  padding: 1px 6px;
+  padding: 2px 8px;
   border-radius: 4px;
-  background: #e2e8f0;
-  color: #334155;
-  font-family: monospace;
 }
 
-.node-kind-badge.target {
+.badge-green {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge-blue {
   background: #dbeafe;
   color: #1e40af;
 }
 
-.node-meta {
-  font-size: 11px;
-  color: #94a3b8;
+.badge-red {
+  background: #fee2e2;
+  color: #991b1b;
 }
 
-.node-path {
+.badge-gray {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.hero-sync-mode {
   font-size: 12px;
-  color: #0f172a;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-bottom: 8px;
-}
-
-.node-metrics {
-  font-size: 11px;
   color: #64748b;
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
-.metric-divider {
-  color: #cbd5e1;
+.hero-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: #0f172a;
 }
 
-.status-ok {
-  color: #10b981;
-  font-weight: 500;
+.hero-desc {
+  margin: 0;
+  font-size: 13px;
+  color: #64748b;
 }
 
-/* 中间通道 */
-.flow-channel {
+.hero-actions {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  text-align: center;
+  align-items: flex-end;
+  gap: 10px;
 }
 
-.channel-line {
-  width: 100%;
-  height: 2px;
-  background: #cbd5e1;
-  position: relative;
-  margin-bottom: 8px;
+.primary-action-btn {
+  font-weight: 600;
+  padding: 0 20px;
 }
 
-.channel-badge {
-  font-size: 10px;
-  font-weight: 700;
-  color: #2563eb;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  padding: 2px 8px;
-  border-radius: 12px;
-  letter-spacing: 0.5px;
-  font-family: monospace;
+.hero-sub-actions {
+  display: flex;
+  gap: 8px;
 }
 
-.channel-mode-sub {
-  font-size: 10px;
-  color: #94a3b8;
-  margin-top: 4px;
-}
-
-/* 运维 KPI 指标卡片 */
-.kpi-grid {
+/* 路径对比卡片 */
+.path-compare-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: 1fr 60px 1fr;
+  align-items: center;
   gap: 12px;
 }
 
-.kpi-card {
+.path-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 14px 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+
+.path-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.path-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.path-meta {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.path-value-text {
+  font-size: 13px;
+  color: #0f172a;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.path-arrow-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+}
+
+.arrow-svg {
+  width: 20px;
+  height: 20px;
+}
+
+.arrow-tip {
+  font-size: 10px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+/* 快捷指标网格 */
+.quick-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.stat-box {
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   padding: 14px 16px;
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.kpi-card:hover {
-  border-color: #94a3b8;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+.stat-box:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
 }
 
-.kpi-label {
+.stat-title {
   font-size: 12px;
   color: #64748b;
-  font-weight: 500;
-  margin-bottom: 6px;
 }
 
-.kpi-value {
-  font-size: 22px;
+.stat-value {
+  font-size: 20px;
   font-weight: 700;
   color: #0f172a;
-  line-height: 1.2;
 }
 
-.kpi-unit {
-  font-size: 11px;
+.stat-value.small-text {
+  font-size: 14px;
   font-weight: 600;
-  color: #94a3b8;
-  margin-left: 4px;
+  padding: 3px 0;
 }
 
-.kpi-footer {
-  margin-top: 8px;
+.stat-unit {
+  font-size: 12px;
+  font-weight: normal;
+  color: #94a3b8;
+}
+
+.stat-foot {
   font-size: 11px;
   color: #94a3b8;
 }
 
-.link-span {
-  color: #2563eb;
-  cursor: pointer;
-  font-weight: 500;
-}
-
-.link-span:hover {
-  text-decoration: underline;
-}
-
-/* Staging 提示条 */
-.staging-alert-panel {
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  border-radius: 6px;
-  padding: 10px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.staging-alert-content {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.staging-pill {
-  font-size: 10px;
-  font-weight: 700;
-  background: #2563eb;
-  color: #ffffff;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: monospace;
-}
-
-.staging-text {
-  font-size: 12px;
-  color: #1e3a8a;
-}
-
-/* 审计表格面板 */
-.audit-panel {
+/* 最近动态卡片 */
+.recent-records-card {
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  padding: 16px;
+  padding: 16px 20px;
 }
 
-.audit-header {
+.records-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
 }
 
-.audit-title {
-  font-size: 12px;
+.records-title {
+  font-size: 13px;
   font-weight: 700;
-  color: #475569;
-  letter-spacing: 0.5px;
-  font-family: monospace;
+  color: #1e293b;
 }
 
-.audit-table-wrapper {
-  overflow-x: auto;
+.records-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.ops-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-.ops-table th {
-  text-align: left;
-  padding: 8px 10px;
-  background: #f8fafc;
-  color: #64748b;
-  font-weight: 600;
-  border-bottom: 1px solid #e2e8f0;
-  font-size: 11px;
-}
-
-.ops-table td {
-  padding: 10px;
-  border-bottom: 1px solid #f1f5f9;
-  color: #334155;
-}
-
-.empty-td {
+.empty-record {
   text-align: center;
   color: #94a3b8;
-  padding: 24px 0 !important;
+  font-size: 12px;
+  padding: 20px 0;
 }
 
-.monospace-text {
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+.record-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f8fafc;
+  font-size: 12px;
+  gap: 12px;
 }
 
-.status-pill {
+.record-time {
+  font-family: monospace;
+  color: #475569;
+  width: 160px;
+}
+
+.record-status {
+  width: 50px;
+}
+
+.mini-tag {
   font-size: 10px;
   font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: monospace;
+  padding: 1px 6px;
+  border-radius: 3px;
 }
 
-.status-pill.status-ok {
+.mini-tag.tag-ok {
   background: #dcfce7;
   color: #166534;
 }
 
-.status-pill.status-err {
+.mini-tag.tag-err {
   background: #fee2e2;
   color: #991b1b;
 }
 
-.diff-chip {
-  display: inline-block;
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 11px;
-  font-family: monospace;
-  font-weight: 600;
-  margin-right: 4px;
+.record-changes {
+  flex: 1;
+  display: flex;
+  gap: 6px;
 }
 
-.diff-chip.add {
+.change-tag {
+  font-size: 11px;
+  font-family: monospace;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.change-tag.add {
   background: #e0f2fe;
   color: #0369a1;
 }
 
-.diff-chip.mod {
+.change-tag.mod {
   background: #fef3c7;
   color: #b45309;
 }
 
-.diff-chip.del {
+.change-tag.del {
   background: #fee2e2;
   color: #b91c1c;
 }
 
-.log-detail-td {
-  font-size: 12px;
-}
-
-.err-text {
-  color: #dc2626;
-}
-
-.muted-text {
+.change-tag.none {
   color: #94a3b8;
 }
 
-.normal-text {
-  color: #475569;
+.record-duration {
+  font-family: monospace;
+  color: #94a3b8;
+  width: 60px;
+  text-align: right;
 }
 </style>

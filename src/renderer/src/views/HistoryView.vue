@@ -161,22 +161,22 @@ onMounted(() => {
       <div class="panel-header">
         <div class="header-left">
           <div class="header-title-row">
-            <span class="panel-tag">AUDIT LOG STREAM</span>
-            <span class="panel-title">同步事务与审计日志</span>
+            
+            <span class="panel-title">同步历史记录</span>
           </div>
           <span class="panel-subtitle">
-            累计归档 {{ total }} 次同步流水记录 · 记录每次增量下载、内容修改、文件删除与异常调用栈
+            共记录 {{ total }} 次同步操作 · 详细记录每次检查的时间、更新文件数与结果
           </span>
         </div>
 
         <div class="header-actions">
-          <n-button size="medium" @click="load">刷新日志</n-button>
+          <n-button size="medium" @click="load">刷新记录</n-button>
         </div>
       </div>
 
       <!-- 告警信息 -->
       <div v-if="loadError" class="panel-alerts-area">
-        <n-alert type="error" closable title="审计记录检索失败">
+        <n-alert type="error" closable title="记录加载失败">
           {{ loadError }}
         </n-alert>
       </div>
@@ -188,9 +188,9 @@ onMounted(() => {
             <polyline points="4 17 10 11 4 5" />
             <line x1="12" y1="19" x2="20" y2="19" />
           </svg>
-          <span class="empty-title">暂无审计流水记录</span>
+          <span class="empty-title">暂无同步记录</span>
           <span class="empty-desc">
-            当首次自动或手动同步触发时，完整的执行耗时、变更文件数与事务明细将实时记录在此。
+            当开始执行检查与同步时，每次的操作详情都会自动记录在此处。
           </span>
         </div>
 
@@ -213,7 +213,7 @@ onMounted(() => {
       <!-- 面板底部工具栏与分页 -->
       <div class="panel-footer">
         <span class="footer-tip">
-          状态指示: 增(+) 下载新文件 · 改(~) 覆写已变文件 · 删(−) 清除孤儿文件
+          变动说明: +新增下载 · ~更新修改 · −删除多余文件
         </span>
 
         <div class="pager" v-if="totalPages > 1">
@@ -225,7 +225,7 @@ onMounted(() => {
     </div>
 
     <!-- 事务详情 Modal -->
-    <n-modal v-model:show="detailsVisible" preset="card" title="同步事务详情" style="max-width: 620px">
+    <n-modal v-model:show="detailsVisible" preset="card" title="同步详情" style="max-width: 620px">
       <div v-if="detailsItem" class="details-grid">
         <div class="detail-row">
           <span class="detail-key">执行时刻:</span>

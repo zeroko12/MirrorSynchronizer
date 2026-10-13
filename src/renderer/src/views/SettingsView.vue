@@ -1,12 +1,11 @@
 <script setup lang="ts">
 /**
- * SettingsView.vue - 专业运维配置控制台 (Ops Configuration Console)
+ * SettingsView.vue - 常规设置 (面向用户版)
  *
- * 定位: 专业基础设施级同步与更新配置面板
- * 特点:
- * 1. 结构化分区 (Endpoints, Engine Policy, Filter Rules, Services & Remote)
- * 2. 紧凑高信息密度, 清除冗余 demo 遗留
- * 3. 运维常用预设一键注入, 强状态反馈
+ * 核心目标:
+ * 1. 彻底去除开发术语与技术堆叠，文案通俗易懂
+ * 2. 界面分类明确 (目录设置、同步方式、忽略文件、系统设置)
+ * 3. 布局简洁清晰，方便快捷操作
  */
 
 import { computed, onMounted, onUnmounted, ref } from 'vue';
@@ -63,7 +62,7 @@ function validateIgnoreItem(raw: string, existing: readonly string[]): string | 
 function addIgnoreItemFromInput() {
   const err = validateIgnoreItem(newIgnoreItem.value, config.value?.ignoreItems ?? []);
   if (err) {
-    message.error(`忽略项非法: ${err}`);
+    message.error(`规则不合法: ${err}`);
     return;
   }
   const normalized = newIgnoreItem.value.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
@@ -75,11 +74,11 @@ function addIgnoreItemFromInput() {
 function addIgnorePreset(preset: string) {
   const existing = config.value?.ignoreItems ?? [];
   if (existing.includes(preset)) {
-    message.info(`已包含预设项: ${preset}`);
+    message.info(`已存在该项: ${preset}`);
     return;
   }
   config.value = { ...config.value, ignoreItems: [...existing, preset] };
-  message.success(`已添加排除项: ${preset}`);
+  message.success(`已添加忽略项: ${preset}`);
 }
 
 function removeIgnoreItem(idx: number) {
@@ -89,11 +88,6 @@ function removeIgnoreItem(idx: number) {
 
 const pendingApplyCount = ref(0);
 const applying = ref(false);
-const effectiveStagingDir = computed(() => {
-  const c = config.value;
-  if (!c?.targetDir) return '';
-  return c.stagingDir || `${c.targetDir.replace(/[\\/]+$/, '')}-staging`;
-});
 
 function onSyncModeChange(v: 'mirror' | 'bidirectional') {
   config.value = { ...config.value, syncMode: v };
@@ -117,7 +111,7 @@ function clearExecutablePath() {
 
 async function pickExecutable() {
   if (!config.value?.targetDir) {
-    message.warning('请先填写目标目录');
+    message.warning('请先选择本机目录');
     return;
   }
   const result = await getApi().selectPath({
@@ -127,11 +121,11 @@ async function pickExecutable() {
   if (result.canceled || !result.path) return;
   const rel = absToRelPath(result.path, config.value.targetDir);
   if (rel === null) {
-    message.error(`所选路径必须在目标目录内:\n${result.path}`);
+    message.error(`所选文件必须在本机目录内:\n${result.path}`);
     return;
   }
   if (rel === '') {
-    message.warning('选了目标目录自身, 无意义');
+    message.warning('不能选目录本身');
     return;
   }
   config.value = { ...config.value, executablePath: rel };
@@ -154,10 +148,10 @@ async function applyPendingNow() {
   try {
     const r = await getApi().syncApplyNow();
     if (r.ok) {
-      message.success(`应用完成: ${r.applied} 个文件, ${r.blocked} 个被锁跳过`);
+      message.success(`更新成功: ${r.applied} 个文件已替换生效`);
       await refreshStatus();
     } else {
-      message.error(r.error ?? '应用失败');
+      message.error(r.error ?? '更新失败');
     }
     await refreshPendingApplyCount();
   } finally {
@@ -166,17 +160,17 @@ async function applyPendingNow() {
 }
 
 async function clearPendingStaging() {
-  if (!confirm('确认清空 staging 暂存目录? 所有待应用更新将被丢弃。')) return;
+  if (!confirm('确认放弃当前待更新的新文件吗?')) return;
   try {
     const r = await getApi().syncClearStaging();
     if (r.ok) {
-      message.success(`已清空 ${r.cleared ?? 0} 个暂存文件`);
+      message.success('已清空待更新文件');
       await refreshPendingApplyCount();
     } else {
-      message.error(r.error ?? '清空失败');
+      message.error(r.error ?? '操作失败');
     }
   } catch (err) {
-    message.error((err as Error).message ?? '清空失败');
+    message.error((err as Error).message ?? '操作失败');
   }
 }
 
@@ -194,7 +188,7 @@ function absToRelPath(absPath: string, baseDir: string): string | null {
 
 async function pickIgnoreItem(mode: 'file' | 'folder' | 'both') {
   if (!config.value?.targetDir) {
-    message.warning('请先填写目标目录');
+    message.warning('请先设置本机目录');
     return;
   }
   const result = await getApi().selectPath({
@@ -204,13 +198,10 @@ async function pickIgnoreItem(mode: 'file' | 'folder' | 'both') {
   if (result.canceled || !result.path) return;
   const rel = absToRelPath(result.path, config.value.targetDir);
   if (rel === null) {
-    message.error(`所选路径必须在目标目录内:\n${result.path}`);
+    message.error(`所选路径必须在本机目录内:\n${result.path}`);
     return;
   }
-  if (rel === '') {
-    message.warning('选了目标目录自身, 无意义');
-    return;
-  }
+  if (rel === '') return;
   const existing = config.value?.ignoreItems ?? [];
   if (existing.includes(rel)) {
     message.warning(`已存在: ${rel}`);
@@ -263,10 +254,10 @@ function onVersionClick() {
 function toggleAdvanced() {
   advancedMode.value = !advancedMode.value;
   if (advancedMode.value) {
-    message.info('已开启高级运维模式');
+    message.info('已开启高级模式');
     void loadNetworkIPs();
   } else {
-    message.info('已关闭高级运维模式');
+    message.info('已关闭高级模式');
   }
 }
 
@@ -285,7 +276,7 @@ async function loadNetworkIPs() {
 async function copyUrl(url: string) {
   try {
     await navigator.clipboard.writeText(url);
-    message.success(`已复制 ${url}`);
+    message.success(`已复制地址: ${url}`);
   } catch {
     message.error('复制失败');
   }
@@ -301,7 +292,7 @@ async function onToggleRemote(enabled: boolean) {
     const result = await getApi().setRemoteEnabled(enabled);
     if (result.ok && result.info) {
       remoteInfo.value = result.info;
-      message.success(enabled ? '已启用远程 Web 控制台' : '已停用远程 Web 控制台');
+      message.success(enabled ? '已启用局域网管理' : '已关闭局域网管理');
     } else {
       message.error(result.error ?? '操作失败');
     }
@@ -311,14 +302,14 @@ async function onToggleRemote(enabled: boolean) {
 }
 
 async function onResetPassword() {
-  if (!confirm('重置密码会断开所有远程客户端连接, 确定吗?')) return;
+  if (!confirm('重置密码会断开所有已连接的设备，确定吗?')) return;
   resettingPassword.value = true;
   try {
     const result = await getApi().resetRemotePassword();
     if (result.ok && result.newPassword) {
       newlyResetPassword.value = result.newPassword;
       if (result.info) remoteInfo.value = result.info;
-      message.success('密码已重置');
+      message.success('密码已重新生成');
     } else {
       message.error(result.error ?? '重置失败');
     }
@@ -348,7 +339,7 @@ const testState = ref<{
 });
 
 const testTableColumns = [
-  { title: '相对路径', key: 'relPath', ellipsis: { tooltip: true } },
+  { title: '文件名称', key: 'relPath', ellipsis: { tooltip: true } },
   {
     title: '大小',
     key: 'size',
@@ -370,7 +361,7 @@ function formatBytes(n: number): string {
 async function onTestSource() {
   const source = (config.value?.sourceDir ?? '').trim();
   if (!source) {
-    message.warning('请先填写源路径');
+    message.warning('请先填写更新源路径');
     return;
   }
   testState.value = { show: true, loading: true, result: null };
@@ -414,36 +405,27 @@ function startCountdownIfNeeded() {
   }
 }
 
-const sourceType = computed(() => {
-  const s = config.value?.sourceDir ?? '';
-  if (/^webdav:\/\//i.test(s)) return { kind: 'webdav', label: 'WebDAV' };
-  if (/^https?:\/\//i.test(s)) return { kind: 'http', label: 'HTTP' };
-  if (/^[\\/]{2}[^\\/]/.test(s)) return { kind: 'unc', label: 'SMB UNC' };
-  if (/^[A-Z]:[\\/]/i.test(s)) return { kind: 'drive', label: '盘符挂载' };
-  return { kind: 'local', label: '本地目录' };
-});
-
 const networkAlert = computed(() => {
   const s = status.value;
   if (!s) return null;
   if ((s.consecutiveNetworkFailures ?? 0) > 0) {
     return {
       type: 'warning' as const,
-      title: '网络不可达 (已触发重试等待)',
-      message: `连续 ${s.consecutiveNetworkFailures} 次连接失败, 远端共享可能离线或网络异常`,
+      title: '暂时无法连接到更新源',
+      message: '更新源路径可能离线或网络断开，稍后将自动重新尝试',
       retry: retryCountdown.value,
     };
   }
   if (s.lastFatalReason && s.lastResult && !s.lastResult.ok && s.lastFatalReason !== 'unknown') {
     const labels: Record<string, string> = {
-      'not-found': '源或目标路径不存在',
-      'permission-denied': '系统权限受限',
+      'not-found': '指定的更新源或目标目录不存在',
+      'permission-denied': '文件夹权限不足，请以管理员身份运行',
       'disk-full': '磁盘空间不足',
-      'busy': '目标文件已被外部程序锁定占用',
+      'busy': '程序正在运行中，部分文件被占用',
     };
     return {
       type: 'error' as const,
-      title: '同步异常中断',
+      title: '同步失败',
       message: labels[s.lastFatalReason] ?? s.lastFatalReason,
       retry: 0,
     };
@@ -464,9 +446,9 @@ onMounted(async () => {
   window.api.onSyncResult?.((result: any) => {
     refreshStatus();
     if (result?.executableUpdate === 'success' && result?.launchedPid) {
-      message.success(`守护程序已安全拉起: ${config.value?.executablePath ?? ''} (PID=${result.launchedPid})`);
+      message.success('更新已完成并已自动启动程序');
     } else if (result?.executableUpdate === 'blocked') {
-      message.warning(`目标程序运行中, ${config.value?.executablePath ?? ''} 暂未覆盖`);
+      message.warning('目标程序正在运行，待其关闭后将自动更新');
       executableUpdateBlocked.value = true;
     }
   });
@@ -483,7 +465,7 @@ async function onTogglePopup(enabled: boolean) {
   popupEnabled.value = enabled;
   const res = await getApi().stateSetPopupEnabled(enabled);
   if (res.ok) {
-    message.success(enabled ? '已开启桌面更新提示弹窗' : '已切换为静默后台同步');
+    message.success(enabled ? '已开启桌面更新提示' : '已设置为静默在后台同步');
   } else {
     message.error(res.error ?? '操作失败');
   }
@@ -495,7 +477,7 @@ async function onToggleAutostart(enabled: boolean) {
     const res = await getApi().autostartSet(enabled);
     if (res.ok) {
       autostartEnabled.value = res.openAtLogin ?? enabled;
-      message.success(enabled ? '已启用系统开机自启' : '已关闭系统开机自启');
+      message.success(enabled ? '已设置开机自动启动' : '已关闭开机启动');
     } else {
       message.error(res.error ?? '设置失败');
     }
@@ -508,7 +490,7 @@ async function onToggleApplyMappingsImmediately(enabled: boolean) {
   config.value = { ...config.value, applyMappingsImmediately: enabled };
   const ok = await save();
   if (ok) {
-    message.success(enabled ? '映射配置即时拉取生效' : '映射配置跟随周期同步');
+    message.success(enabled ? '已开启即时生效' : '已设置为下次同步生效');
   } else {
     message.error('保存失败');
   }
@@ -531,7 +513,7 @@ async function copyInitialPassword() {
   if (!remoteInfo.value?.initialPassword) return;
   try {
     await navigator.clipboard.writeText(remoteInfo.value.initialPassword);
-    message.success('已复制访问口令');
+    message.success('密码已复制');
   } catch {
     message.error('复制失败');
   }
@@ -561,7 +543,7 @@ async function onSave() {
   savingRef.value = false;
   if (ok) {
     lastSuccessAt.value = Date.now();
-    message.success('配置已保存, 调度引擎热更新生效');
+    message.success('设置已成功保存');
     await refreshStatus();
   } else {
     lastError.value = error.value;
@@ -574,7 +556,7 @@ async function onSaveAndSync() {
   if (canSave.value) {
     const res = await getApi().runSyncNowForce();
     if (res.ok) {
-      message.success('已立即触发同步流水线');
+      message.success('已开始检查更新');
       await refreshStatus();
     } else {
       message.warning(res.error || '同步未执行');
@@ -584,14 +566,14 @@ async function onSaveAndSync() {
 
 function formatTime(ts: number | null): string {
   if (!ts) return '-';
-  return new Date(ts).toLocaleString('zh-CN');
+  return new Date(ts).toLocaleTimeString('zh-CN');
 }
 </script>
 
 <template>
-  <div class="ops-settings-view">
+  <div class="user-settings-view">
     <n-spin :show="loading">
-      <div v-if="formReady" class="settings-container">
+      <div v-if="formReady" class="settings-wrap">
         <!-- 实时告警栏 -->
         <n-alert
           v-if="networkAlert"
@@ -599,25 +581,25 @@ function formatTime(ts: number | null): string {
           :title="networkAlert.title"
           :show-icon="true"
           closable
-          class="ops-alert-banner"
+          class="alert-banner"
         >
           {{ networkAlert.message }}
-          <span v-if="networkAlert.retry > 0" class="retry-badge">
-            · {{ networkAlert.retry }}s 后自动重试
+          <span v-if="networkAlert.retry > 0">
+            (将在 {{ networkAlert.retry }} 秒后自动重试)
           </span>
         </n-alert>
 
-        <!-- 顶部操作条与落盘状态 -->
-        <div class="ops-sticky-toolbar">
-          <div class="toolbar-left">
-            <span class="config-status-label">
-              状态:
-              <span v-if="lastSuccessAt" class="status-clean">已同步最新配置 ({{ formatTime(lastSuccessAt) }})</span>
-              <span v-else class="status-ready">当前配置已就绪</span>
+        <!-- 顶部操作条 -->
+        <div class="sticky-action-bar">
+          <div class="action-info">
+            <span class="save-status-text">
+              <span v-if="lastSuccessAt" class="text-saved">✓ 已于 {{ formatTime(lastSuccessAt) }} 保存</span>
+              <span v-else class="text-normal">配置就绪</span>
             </span>
-            <span v-if="lastError" class="status-error-hint">保存失败: {{ lastError }}</span>
+            <span v-if="lastError" class="text-error">保存失败: {{ lastError }}</span>
           </div>
-          <div class="toolbar-actions">
+
+          <div class="action-btns">
             <n-button
               type="primary"
               size="medium"
@@ -625,7 +607,7 @@ function formatTime(ts: number | null): string {
               :disabled="!canSave"
               @click="onSave"
             >
-              保存配置
+              保存设置
             </n-button>
             <n-button
               type="info"
@@ -639,129 +621,104 @@ function formatTime(ts: number | null): string {
           </div>
         </div>
 
-        <!-- 分区 1: 存储端点与链路拓扑 (Endpoints) -->
-        <section class="ops-section-card">
-          <div class="section-header">
-            <div class="header-title-box">
-              <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              </svg>
-              <h2 class="section-title">存储节点与路径配置 (Storage Endpoints)</h2>
-            </div>
-            <span class="section-desc">配置同步源与目标部署节点的物理或网络挂载路径</span>
+        <!-- 卡片 1: 目录设置 -->
+        <div class="setting-card">
+          <div class="card-title-group">
+            <h3 class="card-title">目录设置</h3>
+            <span class="card-subtitle">设置文件从哪里更新、更新到哪里</span>
           </div>
 
-          <div class="card-body-grid">
-            <!-- 源路径 -->
-            <div class="form-row">
-              <div class="row-label-col">
-                <span class="field-name">源路径 (Source Path)</span>
-                <span class="field-meta">
-                  <span class="protocol-tag">{{ sourceType.label }}</span>
-                  <span class="required-star">*</span>
-                </span>
+          <div class="card-fields">
+            <!-- 更新源路径 -->
+            <div class="setting-row">
+              <div class="field-label-box">
+                <span class="field-label">更新源路径</span>
+                <span class="field-tip">从这个文件夹或服务器下载最新文件</span>
               </div>
-              <div class="row-input-col">
-                <div class="input-with-tools">
+              <div class="field-input-box">
+                <div class="input-action-row">
                   <n-input
                     v-model:value="config.sourceDir"
-                    placeholder="本地路径、\\server\share、或 http(s):// / webdav://"
-                    class="monospace-input"
+                    placeholder="本地目录、局域网共享 \\server\share、或 http(s):// 地址"
                   />
-                  <n-button size="medium" @click="pickFolder('sourceDir')">浏览</n-button>
-                  <n-button
-                    size="medium"
-                    :loading="testState.loading"
-                    @click="onTestSource"
-                  >
-                    连通性测试
+                  <n-button @click="pickFolder('sourceDir')">选择文件夹</n-button>
+                  <n-button :loading="testState.loading" @click="onTestSource">
+                    测试连接
                   </n-button>
                 </div>
-                <div class="field-help">
-                  支持本地目录、SMB 共享 (UNC/盘符)、HTTP 索引源及 WebDAV 协议。
-                </div>
               </div>
             </div>
 
-            <!-- 目标路径 -->
-            <div class="form-row">
-              <div class="row-label-col">
-                <span class="field-name">目标路径 (Target Path)</span>
-                <span class="field-meta">
-                  <span class="required-star">*</span>
-                </span>
+            <!-- 本机程序路径 -->
+            <div class="setting-row">
+              <div class="field-label-box">
+                <span class="field-label">本机程序路径</span>
+                <span class="field-tip">文件将被同步或更新到此目录</span>
               </div>
-              <div class="row-input-col">
-                <div class="input-with-tools">
+              <div class="field-input-box">
+                <div class="input-action-row">
                   <n-input
                     v-model:value="config.targetDir"
-                    placeholder="本地待部署应用主目录"
-                    class="monospace-input"
+                    placeholder="您本机待更新的软件所在目录"
                   />
-                  <n-button size="medium" @click="pickFolder('targetDir')">浏览</n-button>
+                  <n-button @click="pickFolder('targetDir')">选择文件夹</n-button>
                 </div>
-                <div class="field-help">必须为本地磁盘目录，同步流水线将向此目录部署文件。</div>
               </div>
             </div>
 
-            <!-- 备份路径 -->
-            <div class="form-row">
-              <div class="row-label-col">
-                <span class="field-name">快照归档路径 (Backup Path)</span>
+            <!-- 备份存放路径 -->
+            <div class="setting-row">
+              <div class="field-label-box">
+                <span class="field-label">备份保存路径</span>
+                <span class="field-tip">可留空，默认自动保存在本机目录旁</span>
               </div>
-              <div class="row-input-col">
-                <div class="input-with-tools">
+              <div class="field-input-box">
+                <div class="input-action-row">
                   <n-input
                     v-model:value="config.backupDir"
-                    placeholder="留空则默认保存在 [目标目录-backups]"
-                    class="monospace-input"
+                    placeholder="留空则自动保存在: [本机目录-backups]"
                   />
-                  <n-button size="medium" @click="pickFolder('backupDir')">浏览</n-button>
+                  <n-button @click="pickFolder('backupDir')">选择文件夹</n-button>
                 </div>
-                <div class="field-help">历史版本快照归档存储位置，用于秒级回滚。</div>
               </div>
             </div>
           </div>
-        </section>
+        </div>
 
-        <!-- 分区 2: 调度引擎与同步策略 (Engine & Sync Policy) -->
-        <section class="ops-section-card">
-          <div class="section-header">
-            <div class="header-title-box">
-              <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-              <h2 class="section-title">调度引擎与同步策略 (Engine & Sync Policy)</h2>
-            </div>
-            <span class="section-desc">定义协同机制、冲突仲裁、执行频率与程序热更新策略</span>
+        <!-- 卡片 2: 同步方式与规则 -->
+        <div class="setting-card">
+          <div class="card-title-group">
+            <h3 class="card-title">同步方式</h3>
+            <span class="card-subtitle">选择同步模式、自动检查频率与更新行为</span>
           </div>
 
-          <div class="card-body-grid">
-            <!-- 同步模式 -->
-            <div class="form-row">
-              <div class="row-label-col">
-                <span class="field-name">同步协同模式</span>
+          <div class="card-fields">
+            <!-- 模式选择 -->
+            <div class="setting-row">
+              <div class="field-label-box">
+                <span class="field-label">同步模式</span>
+                <span class="field-tip">如何处理两端的文件变动</span>
               </div>
-              <div class="row-input-col">
+              <div class="field-input-box">
                 <n-radio-group
                   :value="config.syncMode ?? 'mirror'"
-                  name="syncModeGroup"
+                  name="syncMode"
                   @update:value="onSyncModeChange"
                 >
-                  <div class="policy-radio-cards">
-                    <label class="policy-card" :class="{ selected: (config.syncMode ?? 'mirror') === 'mirror' }">
+                  <div class="mode-select-grid">
+                    <label class="mode-option-card" :class="{ selected: (config.syncMode ?? 'mirror') === 'mirror' }">
                       <n-radio value="mirror" />
-                      <div class="policy-card-info">
-                        <div class="policy-card-title">单向严格镜像 (Mirror · 默认)</div>
-                        <div class="policy-card-desc">源端为绝对唯一真理。目标端多余或未追踪的文件将被自动清除，严格保持完全一致。</div>
+                      <div class="mode-text">
+                        <span class="mode-name">单向更新 (推荐)</span>
+                        <span class="mode-desc">以更新源为准。本机上多余的文件会被清理，保持与源端完全一致。</span>
                       </div>
                     </label>
-                    <label class="policy-card" :class="{ selected: config.syncMode === 'bidirectional' }">
+
+                    <label class="mode-option-card" :class="{ selected: config.syncMode === 'bidirectional' }">
                       <n-radio value="bidirectional" />
-                      <div class="policy-card-info">
-                        <div class="policy-card-title">双向智能协同 (Bidirectional)</div>
-                        <div class="policy-card-desc">三方状态协同比对。目标端本地新增文件自动反推至源端，互不覆盖，保障端侧修改不丢失。</div>
+                      <div class="mode-text">
+                        <span class="mode-name">双向协同</span>
+                        <span class="mode-desc">两端互相同步。本机新加的文件会自动传回源端，互不丢失。</span>
                       </div>
                     </label>
                   </div>
@@ -769,76 +726,75 @@ function formatTime(ts: number | null): string {
               </div>
             </div>
 
-            <!-- 冲突解决策略 (当双向同步时或冲突时) -->
-            <div class="form-row" v-if="config.syncMode === 'bidirectional'">
-              <div class="row-label-col">
-                <span class="field-name">冲突仲裁策略</span>
+            <!-- 双向同步时的冲突处理 -->
+            <div class="setting-row" v-if="config.syncMode === 'bidirectional'">
+              <div class="field-label-box">
+                <span class="field-label">遇到冲突时</span>
+                <span class="field-tip">两边同时修改了同一个文件时的处理方式</span>
               </div>
-              <div class="row-input-col">
+              <div class="field-input-box">
                 <n-radio-group
                   :value="config.conflictPolicy ?? 'rename-target'"
-                  name="conflictPolicyGroup"
+                  name="conflictPolicy"
                   @update:value="onConflictPolicyChange"
                 >
                   <n-space size="large">
-                    <n-radio value="rename-target">重命名目标冲突副本 (rename-target · 推荐)</n-radio>
-                    <n-radio value="source-wins">源端优先覆盖 (source-wins)</n-radio>
-                    <n-radio value="target-wins">目标端优先覆盖 (target-wins)</n-radio>
+                    <n-radio value="rename-target">自动重命名冲突副本 (推荐，保留双方数据)</n-radio>
+                    <n-radio value="source-wins">以更新源为准覆盖</n-radio>
+                    <n-radio value="target-wins">以本机修改为准</n-radio>
                   </n-space>
                 </n-radio-group>
-                <div class="field-help">当两端在同一周期内同时修改同一文件时触发的仲裁决策。</div>
               </div>
             </div>
 
-            <!-- 周期与备份数紧凑双列 -->
-            <div class="form-row-dual">
-              <div class="dual-item">
-                <span class="field-name">自动巡检周期 (秒)</span>
-                <n-input-number
-                  v-model:value="config.intervalSec"
-                  :min="MIN_INTERVAL_SEC"
-                  :max="MAX_INTERVAL_SEC"
-                  class="w-full"
-                />
-                <div class="field-help">调度器自动探测源变动的轮询时间间隔 (默认 300s)</div>
+            <!-- 检查频率与备份数并排 -->
+            <div class="dual-fields-row">
+              <div class="field-sub-col">
+                <span class="field-label">自动检查频率</span>
+                <div class="input-with-unit">
+                  <n-input-number
+                    v-model:value="config.intervalSec"
+                    :min="MIN_INTERVAL_SEC"
+                    :max="MAX_INTERVAL_SEC"
+                    style="width: 140px"
+                  />
+                  <span class="unit-text">秒 (约 {{ Math.round((config.intervalSec || 300) / 60) }} 分钟)</span>
+                </div>
               </div>
-              <div class="dual-item">
-                <span class="field-name">最大保留快照数</span>
-                <n-input-number
-                  v-model:value="config.backupCount"
-                  :min="MIN_BACKUP_COUNT"
-                  :max="MAX_BACKUP_COUNT"
-                  class="w-full"
-                />
-                <div class="field-help">每次执行全量更新前自动归档的快照保留上限</div>
+
+              <div class="field-sub-col">
+                <span class="field-label">保留备份数量</span>
+                <div class="input-with-unit">
+                  <n-input-number
+                    v-model:value="config.backupCount"
+                    :min="MIN_BACKUP_COUNT"
+                    :max="MAX_BACKUP_COUNT"
+                    style="width: 140px"
+                  />
+                  <span class="unit-text">份历史版本 (用于一键还原)</span>
+                </div>
               </div>
             </div>
 
-            <!-- 应用模式 (Immediate / Staging) -->
-            <div class="form-row">
-              <div class="row-label-col">
-                <span class="field-name">更新应用策略</span>
+            <!-- 更新应用方式 -->
+            <div class="setting-row">
+              <div class="field-label-box">
+                <span class="field-label">更新应用方式</span>
               </div>
-              <div class="row-input-col">
+              <div class="field-input-box">
                 <n-radio-group
                   :value="config.applyMode ?? 'immediate'"
-                  name="applyModeGroup"
+                  name="applyMode"
                   @update:value="onApplyModeChange"
                 >
                   <n-space size="large">
-                    <n-radio value="immediate">立即应用 (实时落盘覆盖目标目录)</n-radio>
-                    <n-radio value="staging">暂存模式 (先下载至 Staging 暂存区, 待确认后再原子应用)</n-radio>
+                    <n-radio value="immediate">直接覆盖更新 (发现新文件立即替换)</n-radio>
+                    <n-radio value="staging">先暂存 (下载完毕后，由我手动确认再应用)</n-radio>
                   </n-space>
                 </n-radio-group>
 
-                <!-- 暂存模式下的控制栏 -->
-                <div v-if="config.applyMode === 'staging'" class="staging-sub-panel">
-                  <div class="staging-meta-row">
-                    <span>暂存目录: <code>{{ effectiveStagingDir }}</code></span>
-                    <span v-if="pendingApplyCount > 0" class="pending-count-tag">
-                      {{ pendingApplyCount }} 个文件待应用
-                    </span>
-                  </div>
+                <div v-if="config.applyMode === 'staging'" class="staging-banner">
+                  <span>当前有 <b>{{ pendingApplyCount }}</b> 个待应用的新文件</span>
                   <n-space size="small">
                     <n-button
                       size="small"
@@ -847,91 +803,60 @@ function formatTime(ts: number | null): string {
                       :loading="applying"
                       @click="applyPendingNow"
                     >
-                      立即应用全部暂存更新
+                      立即应用
                     </n-button>
                     <n-button
                       size="small"
                       :disabled="pendingApplyCount === 0"
                       @click="clearPendingStaging"
                     >
-                      清空暂存
+                      放弃更新
                     </n-button>
                   </n-space>
                 </div>
               </div>
             </div>
 
-            <!-- 目标可执行程序 (守护/热启) -->
-            <div class="form-row">
-              <div class="row-label-col">
-                <span class="field-name">目标守护程序</span>
+            <!-- 目标主程序 -->
+            <div class="setting-row">
+              <div class="field-label-box">
+                <span class="field-label">关联主程序</span>
+                <span class="field-tip">可留空；指定后若程序运行中会提示避免损坏</span>
               </div>
-              <div class="row-input-col">
-                <div class="input-with-tools">
+              <div class="field-input-box">
+                <div class="input-action-row">
                   <n-input
                     :value="config.executablePath ?? ''"
-                    placeholder="相对目标目录的可执行文件，例如: bin\app.exe"
-                    class="monospace-input"
+                    placeholder="例如: bin\\app.exe (必须在本机目录下)"
                     readonly
                   />
-                  <n-button size="medium" @click="pickExecutable">选择文件</n-button>
-                  <n-button
-                    v-if="config.executablePath"
-                    size="medium"
-                    @click="clearExecutablePath"
-                  >
-                    清除
-                  </n-button>
-                </div>
-                <div class="field-help">
-                  指定部署目标的程序文件。同步前自动检测文件锁并在更新完成后安全重新拉起。
+                  <n-button @click="pickExecutable">选择主程序</n-button>
+                  <n-button v-if="config.executablePath" @click="clearExecutablePath">清除</n-button>
                 </div>
               </div>
             </div>
-
-            <div class="form-row-switch">
-              <div class="switch-label-group">
-                <span class="switch-title">规则映射即时拉取</span>
-                <span class="switch-desc">在保护规则页添加或修改映射项后，立即将源端文件同步至目标端</span>
-              </div>
-              <n-switch
-                :value="config.applyMappingsImmediately ?? true"
-                @update:value="onToggleApplyMappingsImmediately"
-              />
-            </div>
           </div>
-        </section>
+        </div>
 
-        <!-- 分区 3: 排除项与过滤规则 (Filter & Exclusions) -->
-        <section class="ops-section-card">
-          <div class="section-header">
-            <div class="header-title-box">
-              <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              </svg>
-              <h2 class="section-title">排除过滤与安全规则 (Filter & Exclusions)</h2>
-            </div>
-            <span class="section-desc">被排除的文件与路径绝不参与镜像清除、差异更新或双向同步</span>
+        <!-- 卡片 3: 排除项 (不更新的文件) -->
+        <div class="setting-card">
+          <div class="card-title-group">
+            <h3 class="card-title">排除文件 (不参与更新)</h3>
+            <span class="card-subtitle">添加不需要上传或下载的文件/文件夹名称</span>
           </div>
 
-          <div class="card-body-grid">
-            <!-- 现存排除列表 -->
-            <div class="ignore-tags-container">
-              <div class="tags-header">
-                <span class="tags-title">当前生效的排除项 ({{ config.ignoreItems?.length ?? 0 }})</span>
-                <span class="tags-help">点击右侧图标可移除</span>
-              </div>
-              <div class="tags-cloud">
-                <span v-if="!config.ignoreItems || config.ignoreItems.length === 0" class="empty-tags-hint">
-                  暂无排除项，目标端所有非映射文件均将严格遵循镜像策略
+          <div class="card-fields">
+            <div class="ignore-tags-panel">
+              <div class="tags-list">
+                <span v-if="!config.ignoreItems || config.ignoreItems.length === 0" class="tags-empty">
+                  暂无排除项，所有文件均会正常同步
                 </span>
                 <n-tag
                   v-for="(item, idx) in config.ignoreItems"
                   :key="item"
                   closable
                   size="medium"
-                  type="default"
-                  class="monospace-tag"
+                  class="ignore-chip"
                   @close="removeIgnoreItem(idx)"
                 >
                   {{ item }}
@@ -939,109 +864,41 @@ function formatTime(ts: number | null): string {
               </div>
             </div>
 
-            <!-- 添加新排除项 -->
-            <div class="form-row">
-              <div class="row-label-col">
-                <span class="field-name">手动添加排除</span>
-              </div>
-              <div class="row-input-col">
-                <div class="input-with-tools">
-                  <n-input
-                    v-model:value="newIgnoreItem"
-                    placeholder="相对路径或通配，例如: logs/ 或 *.tmp"
-                    class="monospace-input"
-                    @keydown.enter="addIgnoreItemFromInput"
-                  />
-                  <n-button size="medium" type="primary" @click="addIgnoreItemFromInput">添加</n-button>
-                  <n-button size="medium" @click="pickIgnoreItem('file')">选文件</n-button>
-                  <n-button size="medium" @click="pickIgnoreItem('folder')">选文件夹</n-button>
-                </div>
-              </div>
+            <div class="input-action-row">
+              <n-input
+                v-model:value="newIgnoreItem"
+                placeholder="输入文件名或文件夹，例如: logs/ 或 *.tmp"
+                @keydown.enter="addIgnoreItemFromInput"
+              />
+              <n-button type="primary" @click="addIgnoreItemFromInput">添加</n-button>
+              <n-button @click="pickIgnoreItem('file')">选择文件</n-button>
+              <n-button @click="pickIgnoreItem('folder')">选择文件夹</n-button>
             </div>
 
-            <!-- 运维常用预设 -->
-            <div class="presets-row">
-              <span class="presets-label">常用排除预设:</span>
-              <div class="preset-chips">
-                <button class="preset-btn" @click="addIgnorePreset('.git')">+ .git</button>
-                <button class="preset-btn" @click="addIgnorePreset('node_modules')">+ node_modules</button>
-                <button class="preset-btn" @click="addIgnorePreset('logs')">+ logs/</button>
-                <button class="preset-btn" @click="addIgnorePreset('*.tmp')">+ *.tmp</button>
-                <button class="preset-btn" @click="addIgnorePreset('Thumbs.db')">+ Thumbs.db</button>
+            <div class="presets-bar">
+              <span class="presets-title">快捷添加常用忽略:</span>
+              <div class="preset-links">
+                <button class="preset-link-btn" @click="addIgnorePreset('logs')">+ 日志目录 (logs/)</button>
+                <button class="preset-link-btn" @click="addIgnorePreset('*.tmp')">+ 临时文件 (*.tmp)</button>
+                <button class="preset-link-btn" @click="addIgnorePreset('.git')">+ .git</button>
+                <button class="preset-link-btn" @click="addIgnorePreset('node_modules')">+ node_modules</button>
               </div>
             </div>
           </div>
-        </section>
+        </div>
 
-        <!-- 分区 4: 远程 Web 控制台与系统服务 (Remote & Services) -->
-        <section class="ops-section-card">
-          <div class="section-header">
-            <div class="header-title-box">
-              <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="2" y1="12" x2="22" y2="12" />
-                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-              </svg>
-              <h2 class="section-title">远程 Web 控制台与系统服务 (Remote & Services)</h2>
-            </div>
-            <span class="section-desc">内网远程访问端点、开机自启守护与桌面通知控制</span>
+        <!-- 卡片 4: 系统功能与局域网管理 -->
+        <div class="setting-card">
+          <div class="card-title-group">
+            <h3 class="card-title">系统与辅助功能</h3>
+            <span class="card-subtitle">开机自启、弹窗提醒与局域网设备管理</span>
           </div>
 
-          <div class="card-body-grid">
-            <!-- 远程访问卡片 -->
-            <div class="remote-service-panel">
-              <div class="remote-panel-header">
-                <div class="remote-header-info">
-                  <span class="remote-title">内网 Web 远程运维控制台</span>
-                  <span class="remote-sub">开启后允许同局域网设备通过浏览器访问本看板并执行同步操作</span>
-                </div>
-                <n-switch
-                  :value="remoteInfo?.enabled ?? false"
-                  :loading="togglingRemote"
-                  @update:value="onToggleRemote"
-                />
-              </div>
-
-              <!-- 开启状态详情 -->
-              <div v-if="remoteInfo?.enabled" class="remote-panel-body">
-                <div class="remote-data-grid">
-                  <div class="remote-data-item">
-                    <span class="remote-field-name">控制台 URL</span>
-                    <div class="remote-field-val-row">
-                      <span class="monospace-text link-url" @click="remoteInfo?.url && openExternal(remoteInfo.url)">
-                        {{ remoteInfo?.url }}
-                      </span>
-                      <n-button size="tiny" @click="remoteInfo?.url && copyUrl(remoteInfo.url)">复制</n-button>
-                    </div>
-                  </div>
-
-                  <div class="remote-data-item">
-                    <span class="remote-field-name">服务监听端口</span>
-                    <span class="monospace-text">{{ remoteInfo?.port }}</span>
-                  </div>
-
-                  <div class="remote-data-item">
-                    <span class="remote-field-name">初始口令</span>
-                    <div class="remote-field-val-row">
-                      <span class="monospace-text">{{ remoteInfo?.initialPassword ? '••••••••' : '(已设置)' }}</span>
-                      <n-button v-if="remoteInfo?.initialPassword" size="tiny" @click="copyInitialPassword">复制初始密码</n-button>
-                      <n-button size="tiny" :loading="resettingPassword" @click="onResetPassword">重置密码</n-button>
-                    </div>
-                  </div>
-                </div>
-
-                <div v-if="newlyResetPassword" class="new-pw-alert">
-                  新密码已生成: <code>{{ newlyResetPassword }}</code>
-                  <n-button size="tiny" type="primary" @click="copyNewPassword">立即复制</n-button>
-                </div>
-              </div>
-            </div>
-
-            <!-- 系统常驻与弹窗开关 -->
-            <div class="form-row-switch">
-              <div class="switch-label-group">
-                <span class="switch-title">开机自动启动 (Start on Boot)</span>
-                <span class="switch-desc">系统开机登录时自动在后台启动守护进程，持续维护同步状态</span>
+          <div class="card-fields">
+            <div class="toggle-row">
+              <div class="toggle-text">
+                <span class="toggle-title">开机自动启动</span>
+                <span class="toggle-desc">电脑开机时自动在后台启动本工具，持续保持更新</span>
               </div>
               <n-switch
                 :value="autostartEnabled"
@@ -1050,35 +907,83 @@ function formatTime(ts: number | null): string {
               />
             </div>
 
-            <div class="form-row-switch">
-              <div class="switch-label-group">
-                <span class="switch-title">桌面更新确认弹窗 (Desktop Prompt)</span>
-                <span class="switch-desc">检测到差异时弹出系统对话框等待管理员确认，关闭则静默后台同步</span>
+            <div class="toggle-row">
+              <div class="toggle-text">
+                <span class="toggle-title">发现新版本时弹窗提示</span>
+                <span class="toggle-desc">检测到源端有更新时弹出对话框通知您确认</span>
               </div>
               <n-switch
                 :value="popupEnabled"
                 @update:value="onTogglePopup"
               />
             </div>
-          </div>
-        </section>
 
-        <!-- 底部版权与版本号 -->
-        <footer class="ops-settings-footer">
-          <span class="footer-version-tag" @click="onVersionClick">
-            MirrorSync Engine v0.3.4
-            <span v-if="advancedMode" class="advanced-flag">[ADVANCED OPS]</span>
-          </span>
-        </footer>
+            <div class="toggle-row">
+              <div class="toggle-text">
+                <span class="toggle-title">规则保护即时生效</span>
+                <span class="toggle-desc">在文件保护页面添加新规则后，立即自动执行一次</span>
+              </div>
+              <n-switch
+                :value="config.applyMappingsImmediately ?? true"
+                @update:value="onToggleApplyMappingsImmediately"
+              />
+            </div>
+
+            <!-- 局域网访问面板 -->
+            <div class="remote-access-card">
+              <div class="remote-top">
+                <div class="remote-text">
+                  <span class="remote-title">局域网网页管理</span>
+                  <span class="remote-desc">开启后，同一局域网的手机或电脑可通过浏览器访问本工具</span>
+                </div>
+                <n-switch
+                  :value="remoteInfo?.enabled ?? false"
+                  :loading="togglingRemote"
+                  @update:value="onToggleRemote"
+                />
+              </div>
+
+              <div v-if="remoteInfo?.enabled" class="remote-info-grid">
+                <div class="info-item">
+                  <span class="info-label">访问网址</span>
+                  <div class="info-val-row">
+                    <span class="link-span" @click="remoteInfo?.url && openExternal(remoteInfo.url)">
+                      {{ remoteInfo?.url }}
+                    </span>
+                    <n-button size="tiny" @click="remoteInfo?.url && copyUrl(remoteInfo.url)">复制</n-button>
+                  </div>
+                </div>
+
+                <div class="info-item">
+                  <span class="info-label">访问密码</span>
+                  <div class="info-val-row">
+                    <span>{{ remoteInfo?.initialPassword ? '••••••••' : '(已设置密码)' }}</span>
+                    <n-button v-if="remoteInfo?.initialPassword" size="tiny" @click="copyInitialPassword">复制密码</n-button>
+                    <n-button size="tiny" :loading="resettingPassword" @click="onResetPassword">重置密码</n-button>
+                  </div>
+                </div>
+
+                <div v-if="newlyResetPassword" class="new-pw-box">
+                  <span>新密码: <b>{{ newlyResetPassword }}</b></span>
+                  <n-button size="tiny" type="primary" @click="copyNewPassword">复制</n-button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer-note" @click="onVersionClick">
+          版本: v0.3.4
+        </div>
       </div>
     </n-spin>
 
-    <!-- 源测试结果 Modal -->
+    <!-- 测试源连接结果弹窗 -->
     <n-modal
       v-model:show="testState.show"
       preset="card"
-      style="width: 720px; max-width: 90vw"
-      :title="testState.result?.ok ? '✓ 节点连通性测试通过' : '✗ 节点连通性测试失败'"
+      style="width: 680px; max-width: 90vw"
+      :title="testState.result?.ok ? '✓ 更新源连接正常' : '✗ 更新源连接失败'"
       :bordered="false"
       size="huge"
     >
@@ -1087,24 +992,19 @@ function formatTime(ts: number | null): string {
           <template v-if="testState.result.ok">
             <n-space vertical :size="12">
               <n-space>
-                <n-tag :type="testState.result.adapterKind === 'http' ? 'info' : 'default'">
-                  {{ testState.result.adapterKind === 'http' ? 'HTTP 协议源' : '本地 / SMB' }}
-                </n-tag>
-                <n-text>节点文件总数: <b>{{ testState.result.fileCount }}</b></n-text>
-                <n-text>总容量: <b>{{ formatBytes(testState.result.totalSize ?? 0) }}</b></n-text>
-                <n-text depth="3">探测延迟: {{ testState.result.durationMs }}ms</n-text>
+                <n-tag type="success">连接正常</n-tag>
+                <n-text>共有 <b>{{ testState.result.fileCount }}</b> 个文件</n-text>
+                <n-text>总大小 <b>{{ formatBytes(testState.result.totalSize ?? 0) }}</b></n-text>
+                <n-text depth="3">响应时间 {{ testState.result.durationMs }}ms</n-text>
               </n-space>
 
-              <n-alert
-                v-if="(testState.result.fileCount ?? 0) === 0"
-                type="warning"
-                :show-icon="false"
-              >
-                源端目录为空，同步流水线将不会向目标端分发文件
+              <n-alert v-if="(testState.result.fileCount ?? 0) === 0" type="warning">
+                更新源目录目前为空
               </n-alert>
+
               <template v-else>
-                <div class="sample-header-text">
-                  前 {{ SOURCE_TEST_SAMPLE_SIZE }} 个节点样本文件清单:
+                <div style="font-size: 13px; font-weight: 600; margin-top: 8px">
+                  文件列表预览 (前 {{ SOURCE_TEST_SAMPLE_SIZE }} 个):
                 </div>
                 <n-data-table
                   :columns="testTableColumns"
@@ -1117,6 +1017,7 @@ function formatTime(ts: number | null): string {
               </template>
             </n-space>
           </template>
+
           <template v-else>
             <n-space vertical :size="12">
               <n-alert type="error" :show-icon="true">
@@ -1126,12 +1027,13 @@ function formatTime(ts: number | null): string {
                 </n-space>
               </n-alert>
               <n-text depth="3" style="font-size: 12px">
-                运维处理建议: {{ adviceOf(testState.result.fatalReason as any) }}
+                建议: {{ adviceOf(testState.result.fatalReason as any) }}
               </n-text>
             </n-space>
           </template>
         </div>
       </n-spin>
+
       <template #footer>
         <n-space justify="end">
           <n-button @click="testState.show = false">关闭</n-button>
@@ -1140,7 +1042,7 @@ function formatTime(ts: number | null): string {
             type="primary"
             @click="onTestSource"
           >
-            重试探测
+            重新测试
           </n-button>
         </n-space>
       </template>
@@ -1149,34 +1051,27 @@ function formatTime(ts: number | null): string {
 </template>
 
 <style scoped>
-.ops-settings-view {
+.user-settings-view {
   height: 100%;
   overflow-y: auto;
   padding: 20px 24px 60px;
   box-sizing: border-box;
 }
 
-.settings-container {
-  max-width: 1080px;
+.settings-wrap {
+  max-width: 960px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 
-/* 顶部告警 */
-.ops-alert-banner {
+.alert-banner {
   border-radius: 8px;
 }
 
-.retry-badge {
-  margin-left: 8px;
-  font-weight: 600;
-  color: #d97706;
-}
-
-/* 粘性保存操作栏 */
-.ops-sticky-toolbar {
+/* 顶部操作条 */
+.sticky-action-bar {
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
@@ -1184,218 +1079,143 @@ function formatTime(ts: number | null): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
 }
 
-.toolbar-left {
+.action-info {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.config-status-label {
-  font-size: 13px;
-  color: #64748b;
-  font-weight: 500;
-}
-
-.status-clean {
+.text-saved {
   color: #10b981;
+  font-size: 13px;
   font-weight: 600;
-  margin-left: 6px;
 }
 
-.status-ready {
-  color: #3b82f6;
-  font-weight: 600;
-  margin-left: 6px;
+.text-normal {
+  color: #64748b;
+  font-size: 13px;
 }
 
-.status-error-hint {
-  font-size: 12px;
+.text-error {
   color: #ef4444;
-  font-weight: 600;
+  font-size: 12px;
 }
 
-.toolbar-actions {
+.action-btns {
   display: flex;
-  gap: 12px;
+  gap: 10px;
 }
 
-/* 分区卡片 */
-.ops-section-card {
+/* 卡片容器 */
+.setting-card {
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   padding: 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
 }
 
-.section-header {
+.card-title-group {
+  margin-bottom: 16px;
+  padding-bottom: 10px;
   border-bottom: 1px solid #f1f5f9;
-  padding-bottom: 14px;
-  margin-bottom: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
 }
 
-.header-title-box {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.section-icon {
-  width: 18px;
-  height: 18px;
-  color: #2563eb;
-  flex-shrink: 0;
-}
-
-.section-title {
-  margin: 0;
+.card-title {
+  margin: 0 0 4px;
   font-size: 15px;
   font-weight: 700;
   color: #0f172a;
 }
 
-.section-desc {
+.card-subtitle {
   font-size: 12px;
   color: #64748b;
-  margin-left: 28px;
 }
 
-.card-body-grid {
+.card-fields {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
 }
 
-/* 表单行结构 */
-.form-row {
+/* 字段行 */
+.setting-row {
   display: grid;
-  grid-template-columns: 200px 1fr;
+  grid-template-columns: 180px 1fr;
   align-items: start;
   gap: 16px;
 }
 
-.row-label-col {
-  padding-top: 6px;
+.field-label-box {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  padding-top: 6px;
 }
 
-.field-name {
+.field-label {
   font-size: 13px;
   font-weight: 600;
   color: #1e293b;
 }
 
-.field-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.field-tip {
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.4;
 }
 
-.protocol-tag {
-  font-size: 10px;
-  font-weight: 700;
-  font-family: monospace;
-  background: #eff6ff;
-  color: #2563eb;
-  padding: 1px 6px;
-  border-radius: 4px;
-  border: 1px solid #dbeafe;
-}
-
-.required-star {
-  color: #ef4444;
-  font-weight: 700;
-}
-
-.row-input-col {
+.field-input-box {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.input-with-tools {
+.input-action-row {
   display: flex;
   gap: 8px;
 }
 
-.monospace-input :deep(input) {
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 13px;
-}
-
-.field-help {
-  font-size: 12px;
-  color: #94a3b8;
-  line-height: 1.5;
-}
-
-/* 双列网格 */
-.form-row-dual {
+/* 双列并排 */
+.dual-fields-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 24px;
-  padding: 12px 0;
-  border-top: 1px solid #f8fafc;
-  border-bottom: 1px solid #f8fafc;
+  gap: 20px;
+  padding: 8px 0;
 }
 
-.dual-item {
+.field-sub-col {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.w-full {
-  width: 100%;
-}
-
-/* 开关行 */
-.form-row-switch {
+.input-with-unit {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px;
-  background: #f8fafc;
-  border-radius: 6px;
-  border: 1px solid #f1f5f9;
+  gap: 8px;
 }
 
-.switch-label-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.switch-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #1e293b;
-}
-
-.switch-desc {
+.unit-text {
   font-size: 12px;
   color: #64748b;
 }
 
-/* 协同策略卡片单选 */
-.policy-radio-cards {
+/* 模式单选 */
+.mode-select-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
 
-.policy-card {
+.mode-option-card {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: 10px;
   padding: 12px 14px;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
@@ -1404,156 +1224,147 @@ function formatTime(ts: number | null): string {
   transition: all 0.15s ease;
 }
 
-.policy-card:hover {
+.mode-option-card:hover {
   background: #f1f5f9;
-  border-color: #cbd5e1;
 }
 
-.policy-card.selected {
+.mode-option-card.selected {
   background: #eff6ff;
   border-color: #93c5fd;
 }
 
-.policy-card-info {
+.mode-text {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 
-.policy-card-title {
+.mode-name {
   font-size: 13px;
   font-weight: 700;
   color: #0f172a;
 }
 
-.policy-card-desc {
-  font-size: 11px;
+.mode-desc {
+  font-size: 12px;
   color: #64748b;
-  line-height: 1.5;
+  line-height: 1.4;
 }
 
-/* 暂存子面板 */
-.staging-sub-panel {
+/* 暂存提示 */
+.staging-banner {
   margin-top: 8px;
-  padding: 10px 14px;
+  padding: 8px 12px;
   background: #f0fdf4;
   border: 1px solid #bbf7d0;
   border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-
-.staging-meta-row {
   font-size: 12px;
   color: #166534;
+}
+
+/* 忽略项列表 */
+.ignore-tags-panel {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.tags-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 32px;
+  align-items: center;
+}
+
+.tags-empty {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.ignore-chip {
+  font-family: monospace;
+}
+
+.presets-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  font-size: 12px;
 }
 
-.pending-count-tag {
-  background: #16a34a;
-  color: #ffffff;
-  padding: 1px 6px;
+.presets-title {
+  color: #64748b;
+}
+
+.preset-links {
+  display: flex;
+  gap: 8px;
+}
+
+.preset-link-btn {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
   border-radius: 4px;
+  padding: 3px 8px;
   font-size: 11px;
-  font-weight: 700;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
 
-/* 忽略项标签池 */
-.ignore-tags-container {
+.preset-link-btn:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+/* 开关行 */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
+  border-radius: 6px;
+}
+
+.toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toggle-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.toggle-desc {
+  font-size: 12px;
+  color: #64748b;
+}
+
+/* 局域网管理面板 */
+.remote-access-card {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
   padding: 12px 14px;
 }
 
-.tags-header {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-
-.tags-title {
-  font-size: 12px;
-  font-weight: 700;
-  color: #475569;
-}
-
-.tags-help {
-  font-size: 11px;
-  color: #94a3b8;
-}
-
-.tags-cloud {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-height: 36px;
-  align-items: center;
-}
-
-.empty-tags-hint {
-  font-size: 12px;
-  color: #94a3b8;
-}
-
-.monospace-tag {
-  font-family: "SFMono-Regular", Consolas, monospace;
-}
-
-/* 预设栏 */
-.presets-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 4px 0;
-}
-
-.presets-label {
-  font-size: 12px;
-  color: #64748b;
-  font-weight: 500;
-}
-
-.preset-chips {
-  display: flex;
-  gap: 8px;
-}
-
-.preset-btn {
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  border-radius: 4px;
-  padding: 3px 8px;
-  font-size: 11px;
-  font-family: monospace;
-  color: #334155;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.preset-btn:hover {
-  background: #e2e8f0;
-  color: #0f172a;
-}
-
-/* 远程 Web 运维卡片 */
-.remote-service-panel {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  padding: 14px;
-}
-
-.remote-panel-header {
+.remote-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
-.remote-header-info {
+.remote-text {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1561,60 +1372,51 @@ function formatTime(ts: number | null): string {
 
 .remote-title {
   font-size: 13px;
-  font-weight: 700;
-  color: #0f172a;
+  font-weight: 600;
+  color: #1e293b;
 }
 
-.remote-sub {
+.remote-desc {
   font-size: 12px;
   color: #64748b;
 }
 
-.remote-panel-body {
-  margin-top: 14px;
-  padding-top: 14px;
+.remote-info-grid {
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px solid #e2e8f0;
-}
-
-.remote-data-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-}
-
-.remote-data-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
 }
 
-.remote-field-name {
-  font-size: 11px;
-  font-weight: 600;
+.info-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+}
+
+.info-label {
+  width: 70px;
   color: #64748b;
-  text-transform: uppercase;
 }
 
-.remote-field-val-row {
+.info-val-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.monospace-text {
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
-}
-
-.link-url {
+.link-span {
   color: #2563eb;
   cursor: pointer;
   text-decoration: underline;
+  font-family: monospace;
 }
 
-.new-pw-alert {
-  margin-top: 10px;
-  padding: 8px 12px;
+.new-pw-box {
+  padding: 6px 10px;
   background: #fef3c7;
   border: 1px solid #fde68a;
   border-radius: 4px;
@@ -1625,28 +1427,11 @@ function formatTime(ts: number | null): string {
   gap: 10px;
 }
 
-.ops-settings-footer {
+.footer-note {
   text-align: center;
-  padding-top: 16px;
-}
-
-.footer-version-tag {
   font-size: 11px;
   color: #94a3b8;
-  font-family: monospace;
   cursor: pointer;
   user-select: none;
-}
-
-.advanced-flag {
-  color: #2563eb;
-  font-weight: 700;
-}
-
-.sample-header-text {
-  font-size: 12px;
-  font-weight: 600;
-  color: #475569;
-  margin-top: 8px;
 }
 </style>
