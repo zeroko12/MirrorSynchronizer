@@ -125,6 +125,8 @@ const api = {
     ipcRenderer.invoke('remote:setEnabled', enabled),
   resetRemotePassword: (): Promise<{ ok: boolean; error?: string; newPassword?: string; info?: RemoteAccessInfo | null }> =>
     ipcRenderer.invoke('remote:resetPassword'),
+  setRemotePassword: (password: string): Promise<{ ok: boolean; error?: string; newPassword?: string; info?: RemoteAccessInfo | null }> =>
+    ipcRenderer.invoke('remote:setPassword', password),
   listNetworkIPs: (): Promise<Array<{ name: string; address: string; family: 'IPv4' | 'IPv6'; internal: boolean; mac: string }>> =>
     ipcRenderer.invoke('remote:listIPs'),
   // 在系统默认浏览器打开 URL

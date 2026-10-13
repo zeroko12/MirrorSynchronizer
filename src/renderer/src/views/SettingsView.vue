@@ -32,6 +32,7 @@ import { useConfig } from '../composables/useConfig';
 import { labelOf, adviceOf } from '@core/labels';
 import * as formatUtil from '../utils/format';
 import { tryLog } from '../utils/try-log';
+import { copyText } from '../utils/clipboard';
 import {
   MAX_BACKUP_COUNT,
   MAX_INTERVAL_SEC,
@@ -273,12 +274,21 @@ async function loadNetworkIPs() {
   if (ips) networkIPs.value = ips;
 }
 
-async function copyUrl(url: string) {
-  try {
-    await navigator.clipboard.writeText(url);
-    message.success(`已复制地址: ${url}`);
-  } catch {
-    message.error('复制失败');
+async function copyTargetUrl(url: string) {
+  const ok = await copyText(url);
+  if (ok) {
+    message.success(`已复制访问地址: ${url}`);
+  } else {
+    message.error('复制失败，请手动选取复制');
+  }
+}
+
+async function copyPasswordText(pwd: string) {
+  const ok = await copyText(pwd);
+  if (ok) {
+    message.success('访问密码已复制到剪贴板');
+  } else {
+    message.error('复制失败，请手动选取复制');
   }
 }
 
@@ -301,6 +311,42 @@ async function onToggleRemote(enabled: boolean) {
   }
 }
 
+
+// 自定义修改密码状态
+const showChangePasswordModal = ref(false);
+const customPasswordInput = ref('');
+const savingCustomPassword = ref(false);
+
+function openChangePasswordModal() {
+  customPasswordInput.value = '';
+  showChangePasswordModal.value = true;
+}
+
+async function handleSaveCustomPassword() {
+  const pwd = customPasswordInput.value.trim();
+  if (!pwd) {
+    message.warning('请输入新密码');
+    return;
+  }
+  savingCustomPassword.value = true;
+  try {
+    const res = await getApi().setRemotePassword(pwd);
+    if (res.ok) {
+      if (res.info) remoteInfo.value = res.info;
+      newlyResetPassword.value = pwd;
+      message.success('密码已成功修改并生效');
+      showChangePasswordModal.value = false;
+      customPasswordInput.value = '';
+    } else {
+      message.error(res.error || '修改密码失败');
+    }
+  } catch (err) {
+    message.error((err as Error).message || '修改密码失败');
+  } finally {
+    savingCustomPassword.value = false;
+  }
+}
+
 async function onResetPassword() {
   if (!confirm('重置密码会断开所有已连接的设备，确定吗?')) return;
   resettingPassword.value = true;
@@ -318,11 +364,14 @@ async function onResetPassword() {
   }
 }
 
-function copyNewPassword() {
+async function copyNewPassword() {
   if (!newlyResetPassword.value) return;
-  void copyUrl(newlyResetPassword.value).then(() => {
-    setTimeout(() => { newlyResetPassword.value = null; }, 5000);
-  });
+  const ok = await copyText(newlyResetPassword.value);
+  if (ok) {
+    message.success('新密码已复制到剪贴板');
+  } else {
+    message.error('复制失败');
+  }
 }
 
 const retryCountdown = ref(0);
@@ -509,15 +558,7 @@ usePolling(() => {
   });
 }, 10_000, { immediate: false });
 
-async function copyInitialPassword() {
-  if (!remoteInfo.value?.initialPassword) return;
-  try {
-    await navigator.clipboard.writeText(remoteInfo.value.initialPassword);
-    message.success('密码已复制');
-  } catch {
-    message.error('复制失败');
-  }
-}
+
 
 async function refreshStatus() {
   const s = await tryLog('getStatus', () => getApi().getStatus());
@@ -944,27 +985,105 @@ function formatTime(ts: number | null): string {
               </div>
 
               <div v-if="remoteInfo?.enabled" class="remote-info-grid">
-                <div class="info-item">
-                  <span class="info-label">访问网址</span>
-                  <div class="info-val-row">
-                    <span class="link-span" @click="remoteInfo?.url && openExternal(remoteInfo.url)">
-                      {{ remoteInfo?.url }}
-                    </span>
-                    <n-button size="tiny" @click="remoteInfo?.url && copyUrl(remoteInfo.url)">复制</n-button>
+                <!-- 多网卡全部展示 -->
+                <div class="info-item ip-addresses-section">
+                  <div class="info-label-group">
+                    <span class="info-label">访问网址</span>
+                    <span class="info-sublabel">支持多网卡</span>
+                  </div>
+                  <div class="network-ips-list">
+                    <template v-if="networkIPs.length > 0">
+                      <div v-for="nic in networkIPs" :key="nic.address" class="ip-row-card">
+                        <div class="nic-badge-col">
+                          <span class="nic-badge">{{ nic.name || '网络' }}</span>
+                        </div>
+                        <span
+                          class="nic-url link-span"
+                          :title="`点击在浏览器打开 http://${nic.address}:${remoteInfo?.port || 52331}`"
+                          @click="openExternal(`http://${nic.address}:${remoteInfo?.port || 52331}`)"
+                        >
+                          http://{{ nic.address }}:{{ remoteInfo?.port || 52331 }}
+                        </span>
+                        <div class="nic-btn-actions">
+                          <n-button
+                            size="tiny"
+                            type="primary"
+                            secondary
+                            @click="copyTargetUrl(`http://${nic.address}:${remoteInfo?.port || 52331}`)"
+                          >
+                            复制
+                          </n-button>
+                          <n-button
+                            size="tiny"
+                            quaternary
+                            @click="openExternal(`http://${nic.address}:${remoteInfo?.port || 52331}`)"
+                          >
+                            打开
+                          </n-button>
+                        </div>
+                      </div>
+                    </template>
+                    <template v-else-if="remoteInfo?.url">
+                      <div class="ip-row-card">
+                        <span class="nic-url link-span" @click="openExternal(remoteInfo.url)">
+                          {{ remoteInfo.url }}
+                        </span>
+                        <div class="nic-btn-actions">
+                          <n-button size="tiny" type="primary" secondary @click="copyTargetUrl(remoteInfo.url)">
+                            复制
+                          </n-button>
+                          <n-button size="tiny" quaternary @click="openExternal(remoteInfo.url)">
+                            打开
+                          </n-button>
+                        </div>
+                      </div>
+                    </template>
+                    <template v-else>
+                      <span class="text-dim">正在获取本机 IP 列表...</span>
+                    </template>
                   </div>
                 </div>
 
+                <!-- 密码管理(支持修改、查看、复制、重置) -->
                 <div class="info-item">
                   <span class="info-label">访问密码</span>
                   <div class="info-val-row">
-                    <span>{{ remoteInfo?.initialPassword ? '••••••••' : '(已设置密码)' }}</span>
-                    <n-button v-if="remoteInfo?.initialPassword" size="tiny" @click="copyInitialPassword">复制密码</n-button>
-                    <n-button size="tiny" :loading="resettingPassword" @click="onResetPassword">重置密码</n-button>
+                    <span class="password-display">
+                      {{ remoteInfo?.initialPassword ? remoteInfo.initialPassword : '•••••••• (已设置密码)' }}
+                    </span>
+                    <n-button
+                      v-if="remoteInfo?.initialPassword"
+                      size="tiny"
+                      secondary
+                      @click="copyPasswordText(remoteInfo.initialPassword)"
+                    >
+                      复制密码
+                    </n-button>
+                    <n-button
+                      size="tiny"
+                      type="primary"
+                      ghost
+                      @click="openChangePasswordModal"
+                    >
+                      修改密码
+                    </n-button>
+                    <n-popconfirm
+                      @positive-click="onResetPassword"
+                      positive-text="确认重置"
+                      negative-text="取消"
+                    >
+                      <template #trigger>
+                        <n-button size="tiny" :loading="resettingPassword">
+                          随机重置
+                        </n-button>
+                      </template>
+                      重置密码将重新生成随机密码，确定重置吗？
+                    </n-popconfirm>
                   </div>
                 </div>
 
                 <div v-if="newlyResetPassword" class="new-pw-box">
-                  <span>新密码: <b>{{ newlyResetPassword }}</b></span>
+                  <span>当前密码: <b>{{ newlyResetPassword }}</b></span>
                   <n-button size="tiny" type="primary" @click="copyNewPassword">复制</n-button>
                 </div>
               </div>
@@ -1043,6 +1162,41 @@ function formatTime(ts: number | null): string {
             @click="onTestSource"
           >
             重新测试
+          </n-button>
+        </n-space>
+      </template>
+    </n-modal>
+    <!-- 修改局域网访问密码 Modal -->
+    <n-modal
+      v-model:show="showChangePasswordModal"
+      preset="card"
+      title="修改局域网访问密码"
+      style="max-width: 440px"
+    >
+      <div class="change-pw-form">
+        <p class="change-pw-tip">
+          设置自定义密码后，同一局域网设备通过网页访问本工具时需输入此密码进行身份验证。
+        </p>
+        <n-form-item label="设置新密码">
+          <n-input
+            v-model:value="customPasswordInput"
+            type="password"
+            show-password-on="click"
+            placeholder="请输入新密码 (例如: admin888)"
+            @keyup.enter="handleSaveCustomPassword"
+          />
+        </n-form-item>
+      </div>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showChangePasswordModal = false">取消</n-button>
+          <n-button
+            type="primary"
+            :loading="savingCustomPassword"
+            :disabled="!customPasswordInput.trim()"
+            @click="handleSaveCustomPassword"
+          >
+            保存密码
           </n-button>
         </n-space>
       </template>
@@ -1436,4 +1590,98 @@ function formatTime(ts: number | null): string {
   cursor: pointer;
   user-select: none;
 }
+
+.ip-addresses-section {
+  align-items: flex-start !important;
+}
+
+.info-label-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 70px;
+  flex-shrink: 0;
+}
+
+.info-sublabel {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.network-ips-list {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ip-row-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.nic-badge-col {
+  flex-shrink: 0;
+}
+
+.nic-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--panel-tag-bg);
+  border: 1px solid var(--panel-tag-border);
+  color: var(--panel-tag-color);
+  font-family: monospace;
+}
+
+.nic-url {
+  font-family: monospace;
+  font-size: 13px;
+  color: #2563eb;
+  cursor: pointer;
+  text-decoration: underline;
+  word-break: break-all;
+  flex: 1;
+  min-width: 140px;
+}
+
+.nic-btn-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.password-display {
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+  padding: 3px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.change-pw-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.change-pw-tip {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
 </style>

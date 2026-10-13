@@ -84,6 +84,7 @@ export interface RemoteManager {
    * 返回新密码明文(只这一次显示给用户)
    */
   resetPassword: () => Promise<{ newPassword: string; info: RemoteAccessInfo | null }>;
+  setPassword: (password: string) => Promise<{ newPassword: string; info: RemoteAccessInfo | null }>;
   /** 主动广播 payload(给 main 用于:runNow 后立刻推 snapshot) */
   broadcast: (payload: unknown) => void;
 }
@@ -282,6 +283,57 @@ export function createRemoteManager(deps: RemoteDeps): RemoteManager {
     return { newPassword: plain, info: getInfo() };
   }
 
+
+  /**
+   * 自定义修改密码
+   */
+  async function setPassword(plain: string): Promise<{ newPassword: string; info: RemoteAccessInfo | null }> {
+    if (!deps.getConfig()?.remote) {
+      throw new Error('config.remote 不存在');
+    }
+    const trimmed = plain.trim();
+    if (!trimmed) {
+      throw new Error('新密码不能为空');
+    }
+    const newHash = await hashPassword(trimmed);
+
+    // 1. 写新密码
+    const cfg = deps.getConfig()!;
+    cfg.remote!.passwordHash = newHash;
+    cfg.remote!.initialPassword = trimmed;
+    lastInitialPassword = trimmed;
+
+    // 2. 强制所有 client 掉线 — 重启 server
+    if (server) {
+      await server.close();
+      server = null;
+    }
+    if (mdns) {
+      mdns.close();
+      mdns = null;
+    }
+
+    // 3. 重新启动(用新密码的 server)
+    server = await startRemoteServer({
+      config: () => deps.getConfig(),
+      historyDB: () => deps.getHistoryDB(),
+      scheduler: () => deps.getScheduler(),
+      pendingPopup: () => deps.getPendingPopup(),
+      onRemoteDecision: deps.onRemoteDecision,
+      onRemoteRunNow: deps.onRemoteRunNow,
+      appName: deps.appName,
+      appVersion: deps.appVersion,
+      configPath: deps.configPath,
+    });
+    if (cfg.remote!.autoDiscover) {
+      const host = primaryHostForMdns();
+      if (host) mdns = startMdns(server.port, host);
+    }
+
+    log.info(`[manager] 密码已修改成功`);
+    return { newPassword: trimmed, info: getInfo() };
+  }
+
   function primaryHostForMdns(): string | null {
     const ifs = networkInterfaces();
     for (const list of Object.values(ifs)) {
@@ -295,7 +347,7 @@ export function createRemoteManager(deps: RemoteDeps): RemoteManager {
 
   return {
     start, stop, onSyncResult, onPopup, onPopupClosed,
-    getInfo, isEnabled, isRunning, resetPassword,
+    getInfo, isEnabled, isRunning, resetPassword, setPassword,
     broadcast: (payload) => { if (server) server.broadcast(payload); },
   };
 }

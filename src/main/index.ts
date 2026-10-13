@@ -101,6 +101,17 @@ async function ensureConfig(): Promise<AppConfig> {
 /* ============================ IPC handlers ============================ */
 
 function registerIpc(): void {
+  // 系统剪贴板写入 (原生级保障，绝不失败)
+  ipcMain.handle('clipboard:writeText', (_e, text: string) => {
+    try {
+      electron.clipboard.writeText(String(text ?? ''));
+      return { ok: true };
+    } catch (err) {
+      log.error(`[clipboard] writeText 失败: ${(err as Error).message}`);
+      return { ok: false, error: (err as Error).message };
+    }
+  });
+
   // 主题模式同步到 Electron 原生系统 (Windows 标题栏/系统菜单/窗口底色)
   ipcMain.handle('theme:set', (_e, theme: 'dark' | 'light') => {
     try {
@@ -608,6 +619,23 @@ function registerIpc(): void {
       }
     }
     return { ok: true, info: remoteInfo };
+  });
+
+  // 修改远程访问密码
+  ipcMain.handle('remote:setPassword', async (_e, newPassword: string) => {
+    if (!remote) {
+      return { ok: false, error: '远程服务未启动' };
+    }
+    try {
+      const { newPassword: setPwd, info } = await remote.setPassword(newPassword);
+      remoteInfo = info;
+      await saveConfig();
+      log.info('[remote] 密码已修改');
+      return { ok: true, newPassword: setPwd, info };
+    } catch (err) {
+      log.error(`[remote] setPassword 失败: ${(err as Error).message}`);
+      return { ok: false, error: (err as Error).message };
+    }
   });
 
   // 重置远程访问密码

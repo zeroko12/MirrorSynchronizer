@@ -42,7 +42,7 @@ const lastLoadLog = ref<string>('');
 const message = useMessage();
 let isFirstLoad = true;
 
-const { config, save } = useConfig();
+const { config, load: loadConfig, save } = useConfig();
 const backupCountSaving = ref(false);
 
 async function onChangeBackupCount(value: number | null) {
@@ -172,8 +172,9 @@ const columns: DataTableColumns<BackupItem> = [
 usePolling(() => {
   load();
 }, UI_LIST_POLL_MS, { immediate: false });
-onMounted(() => {
-  load();
+onMounted(async () => {
+  await loadConfig();
+  await load();
   window.api.onSyncResult?.(() => {
     load();
   });
@@ -216,18 +217,19 @@ async function load() {
         </div>
 
         <div class="header-actions">
-          <div class="quota-control">
+          <div class="quota-control" title="设置自动轮转保留的最大历史备份数量">
             <span class="quota-label">最多保留:</span>
             <n-input-number
-              :value="config.backupCount"
+              :value="config.backupCount ?? 3"
               :min="1"
               :max="50"
               :step="1"
               size="small"
               :loading="backupCountSaving"
-              style="width: 100px"
+              class="quota-input-box"
               @update:value="onChangeBackupCount"
             />
+            <span class="quota-unit">份</span>
           </div>
           <n-button size="medium" @click="load">刷新列表</n-button>
         </div>
@@ -335,6 +337,8 @@ async function load() {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
   flex-shrink: 0;
 }
 
@@ -342,6 +346,8 @@ async function load() {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 220px;
+  flex: 1;
 }
 
 .header-title-row {
@@ -375,23 +381,37 @@ async function load() {
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
+  flex-shrink: 0;
 }
 
 .quota-control {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   background: var(--bg-subtle);
   padding: 4px 10px;
   border-radius: 6px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.quota-input-box {
+  width: 95px !important;
+  min-width: 95px !important;
+}
+
+.quota-unit {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .quota-label {
   font-size: 12px;
-  color: #475569;
-  font-weight: 500;
+  color: var(--text-main);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .panel-alerts-area {

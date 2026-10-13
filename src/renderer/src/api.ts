@@ -97,6 +97,7 @@ declare global {
       getRemoteInfo: () => Promise<RemoteAccessInfo | null>;
       setRemoteEnabled: (enabled: boolean) => Promise<{ ok: boolean; error?: string; info?: RemoteAccessInfo | null }>;
       resetRemotePassword: () => Promise<{ ok: boolean; error?: string; newPassword?: string; info?: RemoteAccessInfo | null }>;
+      setRemotePassword: (password: string) => Promise<{ ok: boolean; error?: string; newPassword?: string; info?: RemoteAccessInfo | null }>;
       listNetworkIPs: () => Promise<Array<{ name: string; address: string; family: 'IPv4' | 'IPv6'; internal: boolean; mac: string }>>;
       openExternal: (url: string) => Promise<void>;
       onUpdatePrompt: (callback: (payload: UpdatePromptPayload) => void) => () => void;
